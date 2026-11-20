@@ -35,16 +35,22 @@ cli, runner = sys.argv[1:]
 try:
     result = subprocess.run([runner, "--login-status"], stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
     if cli == "Codex":
-        if result.returncode == 0:
+        lines = result.stderr.splitlines() + result.stdout.splitlines()
+        signed_in = any(line == b"Logged in" or line.startswith(b"Logged in ") for line in lines)
+        if result.returncode == 0 and signed_in:
             sys.exit(0)
-        if b"Not logged in" in (result.stderr + result.stdout).splitlines():
+        if b"Not logged in" in lines:
             sys.exit(1)
     else:
         status = json.loads(result.stdout)
         if isinstance(status, dict):
-            if status.get("loggedIn") is True and result.returncode == 0:
+            logged_in = status.get("loggedIn")
+            method = status.get("authMethod")
+            if "loggedIn" not in status and isinstance(method, str) and method.strip():
+                logged_in = method.strip().lower() != "none"
+            if logged_in is True and result.returncode == 0:
                 sys.exit(0)
-            if status.get("loggedIn") is False and result.returncode in (0, 1):
+            if logged_in is False and result.returncode in (0, 1):
                 sys.exit(1)
 except (OSError, ValueError, subprocess.TimeoutExpired):
     pass

@@ -125,7 +125,7 @@ Use `/codex` or `/claude` and follow [`skills/codex/SKILL.md`](skills/codex/SKIL
 </p>
 
 ```text
-/relaybot-setup                      # once per bot; safe to re-run
+/relaybot-setup                  # once per bot; safe to re-run
 /codex <what the user wants done>
 /claude <what the user wants done>
 ```

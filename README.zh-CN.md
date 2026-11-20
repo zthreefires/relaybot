@@ -125,7 +125,7 @@ git clone https://github.com/zthreefires/relaybot.git ~/relaybot 2>/dev/null || 
 </p>
 
 ```text
-/relaybot-setup                      # 每个 bot 一次；可重复执行
+/relaybot-setup                  # 每个 bot 一次；可重复执行
 /codex <使用者要做的事>
 /claude <使用者要做的事>
 ```

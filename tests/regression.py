@@ -221,7 +221,7 @@ class Runs(unittest.TestCase):
         (self.home / 'config.env').write_text('RELAYBOT_EXTRA_PATH=' + str(STUB.parent) + '\n')
         codex_ok = (0, 'Logged in using ChatGPT')
         codex_out = (1, 'Not logged in')
-        claude_ok = (0, dict(loggedIn=True, email='private-fixture@example.invalid'))
+        claude_ok = (0, dict(loggedIn=True, authMethod='oauth_token', email='private-fixture@example.invalid'))
         claude_out = (1, dict(loggedIn=False))
         for codex, claude, results in [
             (codex_ok, claude_ok, ('Codex signed in', 'Claude Code signed in')),
@@ -229,6 +229,11 @@ class Runs(unittest.TestCase):
             (codex_ok, None, ('Codex signed in', 'Claude Code unavailable')),
             (codex_out, claude_ok, ('Codex signed out', 'Claude Code signed in')),
             (codex_ok, claude_out, ('Codex signed in', 'Claude Code signed out')),
+            (codex_ok, (0, dict(authMethod='oauth_token')), ('Codex signed in', 'Claude Code signed in')),
+            (codex_ok, (0, dict(authMethod='none')), ('Codex signed in', 'Claude Code signed out')),
+            (codex_ok, (0, dict(loggedIn=False, authMethod='api_key')), ('Codex signed in', 'Claude Code signed out')),
+            ((0, 'unexpected output'), (1, dict(authMethod='api_key')), ('Codex login unverified', 'Claude Code login unverified')),
+            (codex_ok, (0, {}), ('Codex signed in', 'Claude Code login unverified')),
             ((1, 'private-fixture error'), (1, {}), ('Codex login unverified', 'Claude Code login unverified')),
         ]:
             with self.subTest(results=results):
