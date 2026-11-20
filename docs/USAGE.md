@@ -2,11 +2,11 @@
 
 ## /relaybot-setup (once per bot)
 
-Send `/relaybot-setup` in the dispatching bot's chat. In one run it checks whether Codex and Claude Code are installed and signed in, then sends a test through their shared webhook. The bot reports each CLI's status and confirms when the test arrives in this chat.
+Send `/relaybot-setup` in the dispatching bot's chat. In one run it checks whether Codex and Claude Code are installed and signed in, then sends a test through their shared webhook. Once the test arrives, the bot tells you which CLI or CLIs on this computer will send results back to this chat.
 
 If one CLI is missing, install it or set its binary path in relaybot's config. If signed out, run `codex login` or `claude auth login` yourself. The other CLI can be used as soon as its checks and the webhook test pass.
 
-Setup reuses the bot's `codex-events` routine and `~/.config/relaybot/webhooks/<slug>.json` (mode 600). When credentials are needed it asks for the URL and collects the key through a secret request. Rerun the same command after fixing a CLI. Both routes keep the existing slug and key. Bots with the compatibility skill installed also accept `/codex-setup`.
+Setup looks for both `relaybot-events` and the legacy `codex-events`. It reuses the existing routine and its `~/.config/relaybot/webhooks/<slug>.json` (mode 600). Legacy routines keep their name and prompt. Only a bot with neither routine gets a new `relaybot-events`. When credentials are needed, setup asks for the URL and collects the key through a secret request. Rerun the same command after fixing a CLI. Both routes keep the existing slug and key. Bots with the compatibility skill installed also accept `/codex-setup`.
 
 ## /codex (each task)
 

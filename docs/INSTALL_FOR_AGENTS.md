@@ -41,8 +41,8 @@ Ask the user for the values they care about and set them in `~/.config/relaybot/
 
 Install `skills/codex/SKILL.md` and `skills/relaybot-setup/SKILL.md` into the agent's skill store. When upgrading a bot with the old command, also refresh `skills/codex-setup/SKILL.md` with the forwarding alias.
 
-Run `/relaybot-setup` in the dispatching bot's chat. It checks both CLIs and their sign-in status, reuses the bot's `codex-events` routine and slug, and sends one shared test. If a CLI is missing or signed out, finish the other route and webhook test. Give the user the missing CLI's install or sign-in instructions.
+Run `/relaybot-setup` in the dispatching bot's chat. It checks both CLIs and their sign-in status and sends one shared test. Reuse the bot's existing event routine and slug. The legacy `codex-events` routine works as is. Create `relaybot-events` only when neither name exists. If a CLI is missing or signed out, finish the other route and webhook test. Give the user the missing CLI's install or sign-in instructions.
 
 ## 5. Report
 
-Report the install prefix, config values set, doctor/selftest results, each CLI's status and the current bot's webhook result.
+Report the install prefix, config values set, doctor/selftest results, each CLI's status and the current bot's webhook result. Once the test arrives, tell the user which ready CLI or CLIs on this computer will send task results back to this chat.

@@ -11,7 +11,7 @@ chat ──> bot (skill: codex) ──Shell──> codex-run ──> codex-app-r
                 │                          │
                 │                          └─ approval / user-input requests ──> turn pause record
                 │
-                └──── webhook routine `codex-events` <── codex-notify (one event per launch)
+                └──── webhook routine `relaybot-events` <── codex-notify (one event per launch)
 ```
 
 ## Run directory
@@ -149,5 +149,4 @@ Delivery: only a direct HTTP 2xx counts. Redirects (301, 302, 303, 307, 308) and
 queued in `$RELAYBOT_HOME/outbox.jsonl` without credentials; there is no automatic retry, and queuing
 does not change the task's exit code. Each launch has its own dedupe slot in `notified.jsonl`.
 
-The receiving side is a webhook routine (`codex-events`) on the dispatching bot. Its prompt is one pointer
-to the `codex` skill, so changing event handling only means editing the skill.
+Each dispatching bot has one webhook routine shared by both runners. New bots use `relaybot-events`. Existing `codex-events` routines keep their name, prompt and webhook. Both prompts point to the same event handler in the `codex` skill.
