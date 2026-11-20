@@ -63,18 +63,14 @@
 
 ## 前置检查
 
-在运行 relaybot 的电脑上检查 Python、Git 和使用者选择的 CLI。
+在运行 relaybot 的电脑上检查 Python 和 Git。
 
 ```bash
 command -v python3 && python3 --version          # need 3.8+
 command -v git
-# 使用 Codex 时
-ls /Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex 2>/dev/null || command -v codex
-# 使用 Claude Code 时
-command -v claude || test -x ~/.local/bin/claude
 ```
 
-如果所选 CLI 未安装或需要登录，询问使用者。还需要一个能在这台电脑上执行命令、能接收 webhook 例程的 bot（按 Grok Bot 设计）。
+还需要一个能在这台电脑上执行命令、接收 webhook 例程的 bot（按 Grok Bot 设计）。安装后，`relaybot-doctor` 会按两个 runner 实际选用的路径检查 Codex 和 Claude Code。
 
 ## 安装
 
@@ -105,20 +101,16 @@ git clone https://github.com/zthreefires/relaybot.git ~/relaybot 2>/dev/null || 
 
 若要测已安装的脚本而不是仓库里的 `bin/`，运行 `~/relaybot/tests/selftest.sh ~/bin`。
 
-3. 把 [`skills/codex/SKILL.md`](skills/codex/SKILL.md) 和 [`skills/codex-setup/SKILL.md`](skills/codex-setup/SKILL.md) 装进当前 agent 的技能库。
+3. 把 [`skills/codex/SKILL.md`](skills/codex/SKILL.md) 和 [`skills/relaybot-setup/SKILL.md`](skills/relaybot-setup/SKILL.md) 装进当前 agent 的技能库。
+   升级已有 bot 时，同时更新旧技能，原来的 `/codex-setup` 就会转到新流程。[兼容技能](skills/codex-setup/SKILL.md)
 
 ## 给 bot 接线
 
-在每个要派活的 bot 自己的对话里，当着使用者运行 `/codex-setup`。严格按 [`skills/codex-setup/SKILL.md`](skills/codex-setup/SKILL.md) 执行。可重复执行：需要时只刷新 `codex-events` 例程的 prompt，不会再建第二个例程；已有可用配置时不会再要密钥。
+在要派活的 bot 自己的对话里，当着使用者运行一次 `/relaybot-setup`，同时配置 `/codex` 和 `/claude`。[接线技能](skills/relaybot-setup/SKILL.md)
 
-它会：
-
-1. 创建或刷新这个 bot 的 `codex-events` webhook 例程。prompt 只是指向 `codex` 技能的一小段说明；不要把事件处理逻辑写进例程。
-2. 还没有可用的 webhook 文件时，请使用者粘贴该例程的 webhook URL，再用密钥请求收集密钥（不要让使用者把密钥发在普通聊天里）。
-3. 把 `{"url","key","bot"}` 写到 `~/.config/relaybot/webhooks/<slug>.json`，目录权限 700，文件权限 600。格式见 [examples/webhook.example.json](examples/webhook.example.json)。
-4. 发送一次 `test` 事件：`~/bin/codex-notify <slug> test /tmp ~ "codex-setup connectivity test"`。应看到 `sent 200`。若结果是 `queued`，或返回 401/404，说明已存的 URL 或密钥失效；重新收集一次 URL 和密钥再测。
-
-只给当前这个 bot 接线。不要创建或修改其他 bot 的例程。事件格式见 [examples/event.example.json](examples/event.example.json)。
+1. 分别检查 Codex 和 Claude Code 是否已安装、已登录。一端缺失时，继续接好另一端，并告诉使用者如何安装缺少的 CLI、指定可执行文件路径，或在终端自行登录。
+2. 复用这个 bot 的 `codex-events` 例程和 webhook slug。缺少例程时才创建，已有例程只按需更新 prompt。需要凭据时收集 URL，通过密钥请求收集密钥。配置写入 `~/.config/relaybot/webhooks/<slug>.json`，目录权限为 700，文件权限为 600。[配置示例](examples/webhook.example.json)
+3. 两端共发一个 `test` 事件，确认当前对话收到后，分别报告 webhook 和两个 CLI 的状态。使用者补装或登录 CLI 后，可以重跑同一命令。[事件示例](examples/event.example.json)
 
 ## 派发任务
 
@@ -128,12 +120,12 @@ git clone https://github.com/zthreefires/relaybot.git ~/relaybot 2>/dev/null || 
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/usage-dark-zh.svg">
     <source media="(prefers-color-scheme: light)" srcset="assets/usage-light-zh.svg">
-    <img alt="Grok Bot 聊天界面：先用 /codex-setup 给 bot 接线一次（webhook 网址、隐藏的密钥、测试事件）；之后 /codex 修复不稳定的登录测试 在 ~/code/my-app 启动 Codex，needs_auth 卡片请求授权运行 npm install，使用者回复“可以，继续”，最后 done 卡片汇报结果并给出 codex resume &lt;session-id&gt;" src="assets/usage-light-zh.svg" width="100%">
+    <img alt="Grok Bot 聊天界面：先用 /relaybot-setup 给 bot 接线一次（webhook 网址、隐藏的密钥、测试事件）；之后 /codex 修复不稳定的登录测试 在 ~/code/my-app 启动 Codex，needs_auth 卡片请求授权运行 npm install，使用者回复“可以，继续”，最后 done 卡片汇报结果并给出 codex resume &lt;session-id&gt;" src="assets/usage-light-zh.svg" width="100%">
   </picture>
 </p>
 
 ```text
-/codex-setup                      # 每个 bot 一次；可重复执行
+/relaybot-setup                      # 每个 bot 一次；可重复执行
 /codex <使用者要做的事>
 /claude <使用者要做的事>
 ```
@@ -150,9 +142,9 @@ git clone https://github.com/zthreefires/relaybot.git ~/relaybot 2>/dev/null || 
 - `~/bin/relaybot-doctor` 会打印 `summary: … fail`，其中应包含 `0 fail`。警告可以接受。
 - `~/relaybot/tests/selftest.sh`（或加上 `~/bin`）应输出 `selftest passed`。它使用桩 Codex、Claude 和本地 webhook，不会调用真实桌面端或外部地址。
 
-`/codex-setup` 之后：
+`/relaybot-setup` 之后：
 
-- `~/bin/relaybot-doctor --webhook-test <slug>` 应打印 `sent 200`。
+- Codex 和 Claude Code 各有一条登录检查结果。需要复测共用的 webhook 时，运行 `~/bin/relaybot-doctor --webhook-test <slug>`，应看到 `sent 200` 或其他 2xx。
 - `codex-events` 例程随后应在当前对话里报告 webhook 可用。
 
 投递被排队（包括遇到重定向）表示送达失败。事件会不带凭证写入 `~/.config/relaybot/outbox.jsonl`。没有自动重发。不要只因为投递被排队就重跑任务。
@@ -161,7 +153,7 @@ git clone https://github.com/zthreefires/relaybot.git ~/relaybot 2>/dev/null || 
 
 只问你自己做不到的事：
 
-- 需要安装或登录所选 CLI 时，请使用者处理。
+- 有 CLI 需要安装或登录时，请使用者在自己的电脑上处理。
 - 他们关心的配置（`RELAYBOT_REPOS_ROOT`、`RELAYBOT_DEFAULT_WORKDIR`、模型和推理强度）。
 - 粘贴 `codex-events` 例程的 webhook URL，并用密钥请求提供密钥。
 - 若希望默认或后备工作目录上的运行也出现在桌面端，请他们为该目录创建 Codex 项目。

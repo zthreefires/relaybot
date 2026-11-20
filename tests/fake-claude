@@ -13,6 +13,14 @@ def emit(kind, **fields):
     print(json.dumps(dict(type=kind, **fields)), flush=True)
 
 
+cfg = json.loads(os.environ["FIXTURE"])
+if sys.argv[1:] == ["auth", "status", "--json"]:
+    with Path(os.environ["TRACE"]).open("a") as trace:
+        print(json.dumps(dict(argv=sys.argv[1:])), file=trace)
+    rc, status = cfg["claude_status"]
+    print(json.dumps(status))
+    sys.exit(rc)
+
 parser = argparse.ArgumentParser()
 parser.add_argument("-p", action="store_true", required=True)
 parser.add_argument("--verbose", action="store_true", required=True)
@@ -21,7 +29,6 @@ parser.add_argument("--output-format", choices=["stream-json"], required=True)
 parser.add_argument("--permission-prompt-tool", choices=["stdio"], required=True)
 parser.add_argument("--resume", type=uuid.UUID)
 args = parser.parse_args()
-cfg = json.loads(os.environ["FIXTURE"])
 sid = cfg.get("sid") or str(args.resume or uuid.uuid4())
 user = json.loads(sys.stdin.buffer.readline())
 assert user["type"] == "user" and user["message"]["role"] == "user"

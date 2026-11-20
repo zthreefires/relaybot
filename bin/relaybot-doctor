@@ -24,22 +24,56 @@ done
 
 if [ -f "$RELAYBOT_HOME/config.env" ]; then pass "config: $RELAYBOT_HOME/config.env"; else note "no $RELAYBOT_HOME/config.env (defaults apply; see config.example.env)"; fi
 
+# Keep account details in the probe process. Unsupported status commands and
+# timeouts leave login unverified, so the other CLI can still be checked.
+check_login() {
+  local cli=$1 runner=$2 login_command=$3
+  "$PY" - "$cli" "$runner" <<'P'
+import json, subprocess, sys
+
+cli, runner = sys.argv[1:]
+try:
+    result = subprocess.run([runner, "--login-status"], stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+    if cli == "Codex":
+        if result.returncode == 0:
+            sys.exit(0)
+        if b"Not logged in" in (result.stderr + result.stdout).splitlines():
+            sys.exit(1)
+    else:
+        status = json.loads(result.stdout)
+        if isinstance(status, dict):
+            if status.get("loggedIn") is True and result.returncode == 0:
+                sys.exit(0)
+            if status.get("loggedIn") is False and result.returncode in (0, 1):
+                sys.exit(1)
+except (OSError, ValueError, subprocess.TimeoutExpired):
+    pass
+sys.exit(2)
+P
+  case $? in
+    0) pass "$cli signed in" ;;
+    1) note "$cli signed out (run $login_command in your terminal, then /relaybot-setup)" ;;
+    *) note "$cli login unverified (check the installed CLI's auth status in your terminal)" ;;
+  esac
+}
+
 claude_bin=$("$here/claude-run" --print-claude-bin 2>/dev/null)
-if [ -x "$claude_bin" ]; then
+if [ -f "$claude_bin" ] && [ -x "$claude_bin" ]; then
   pass "claude: $claude_bin"
+  check_login "Claude Code" "$here/claude-run" "claude auth login"
 else
-  note "Claude Code unavailable (set RELAYBOT_CLAUDE_BIN to enable /claude)"
+  note "Claude Code unavailable (install Claude Code or set RELAYBOT_CLAUDE_BIN to its executable)"
 fi
 
 codex_bin=$("$here/codex-run" --print-codex-bin 2>/dev/null)
-if [ -n "$codex_bin" ] && [ -x "$codex_bin" ]; then
+if [ -f "$codex_bin" ] && [ -x "$codex_bin" ]; then
   pass "codex: $codex_bin ($("$codex_bin" --version 2>/dev/null | head -1))"
+  check_login "Codex" "$here/codex-run" "codex login"
   "$codex_bin" app-server --help >/dev/null 2>&1 && pass "codex app-server available" \
     || note "codex app-server not available: runs will use the exec fallback (not visible in the desktop)"
-elif [ -x "$claude_bin" ]; then
-  note "Codex unavailable (Claude Code available)"
 else
-  fail "no coding CLI found (set RELAYBOT_CODEX_BIN or RELAYBOT_CLAUDE_BIN)"
+  note "Codex unavailable (install the Codex CLI or set RELAYBOT_CODEX_BIN to its executable)"
+  if [ ! -f "$claude_bin" ] || [ ! -x "$claude_bin" ]; then fail "no coding CLI found"; fi
 fi
 
 [ -S "$HOME/.codex/ipc/ipc.sock" ] && pass "desktop IPC socket present (live sidebar refresh)" \
@@ -50,7 +84,7 @@ if [ -d "$wh" ]; then
   perm=$(stat -c %a "$wh" 2>/dev/null || stat -f %Lp "$wh")
   [ "$perm" = 700 ] && pass "webhooks dir $wh (700)" || note "webhooks dir $wh is $perm, expected 700"
   for f in "$wh"/*.json; do
-    [ -e "$f" ] || { note "no webhook configs yet (run /codex-setup in a bot)"; break; }
+    [ -e "$f" ] || { note "no webhook configs yet (run /relaybot-setup in a bot)"; break; }
     "$PY" - "$f" <<'P' && pass "webhook $(basename "$f" .json): url/key/bot present" || fail "webhook $(basename "$f"): bad or incomplete json"
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -58,13 +92,17 @@ sys.exit(0 if all(d.get(k) for k in ("url", "key", "bot")) else 1)
 P
   done
 else
-  note "no $wh yet (created by install.sh or /codex-setup)"
+  note "no $wh yet (created by install.sh or /relaybot-setup)"
 fi
 
 
 if [ "${1:-}" = "--webhook-test" ] && [ -n "${2:-}" ]; then
   echo; echo "webhook test for $2:"
-  "$here/codex-notify" "$2" test /tmp "$HOME" "relaybot-doctor connectivity test"
+  if delivery=$("$here/codex-notify" "$2" test /tmp "$HOME" "relaybot-doctor connectivity test") && [[ $delivery == "sent "2[0-9][0-9] ]]; then
+    echo "$delivery"
+  else
+    fail "webhook test: ${delivery:-codex-notify failed}"
+  fi
 fi
 echo; echo "summary: $ok ok, $warn warn, $bad fail"
 [ $bad -eq 0 ]

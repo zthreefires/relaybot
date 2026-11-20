@@ -24,4 +24,6 @@ echo "installed to $prefix"
 echo
 echo "Next:"
 echo "  1. Run: $prefix/relaybot-doctor"
-echo "  2. Install skills/codex and skills/codex-setup into your agent, then run /codex-setup in each bot."
+echo "  2. Install skills/codex and skills/relaybot-setup into your agent."
+echo "     To keep the old /codex-setup command, also update skills/codex-setup from this repo."
+echo "  3. Run /relaybot-setup once per bot to check Codex and Claude Code and test their shared webhook."

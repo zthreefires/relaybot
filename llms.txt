@@ -10,13 +10,14 @@ The personal agent keeps the context and writes the full prompt; the user picks 
 - [AGENTS.md](AGENTS.md): layout, config keys, self-check commands
 - [Install for agents](docs/INSTALL_FOR_AGENTS.md): end-to-end install and verification steps
 - [Install](docs/INSTALL.md): manual install and configuration reference
-- [Usage](docs/USAGE.md): /codex, /claude and the shared /codex-setup
+- [Usage](docs/USAGE.md): /codex, /claude and the shared /relaybot-setup
 - [Architecture](docs/ARCHITECTURE.md): app-server flow, projectId, desktop refresh, hooks, webhook event contract
 
 ## Skills
 
 - [skills/codex/SKILL.md](skills/codex/SKILL.md): /codex or /claude, dispatch a task and handle events
-- [skills/codex-setup/SKILL.md](skills/codex-setup/SKILL.md): /codex-setup, wire a bot's webhook
+- [skills/relaybot-setup/SKILL.md](skills/relaybot-setup/SKILL.md) checks Codex and Claude Code independently and tests their shared webhook.
+- [skills/codex-setup/SKILL.md](skills/codex-setup/SKILL.md) forwards the legacy /codex-setup command to /relaybot-setup.
 
 ## Optional
 

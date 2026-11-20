@@ -1,21 +1,16 @@
 # Install relaybot (for agents)
 
 You are an agent asked to install relaybot for your user. Follow these steps in order and report the
-result in the user's language. Run commands on the computer where the selected CLI runs (for a personal agent with
-remote machines, that is the user's computer, not your own sandbox). Do not print secrets at any step.
+result in the user's language. Run commands on the user's relaybot computer. Do not print secrets at any step.
 
 ## 0. Preconditions (check, don't fix silently)
 
 ```bash
 command -v python3 && python3 --version          # need 3.8+
 command -v git
-# For Codex
-ls /Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex 2>/dev/null || command -v codex
-# For Claude Code
-command -v claude || test -x ~/.local/bin/claude
 ```
 
-Check only the targets the user intends to run. If a selected CLI is missing or needs sign-in, ask the user.
+The doctor checks both coding CLIs after installation, using the paths selected by their runners.
 
 ## 1. Get the code and install
 
@@ -44,15 +39,10 @@ Ask the user for the values they care about and set them in `~/.config/relaybot/
 
 ## 4. Install the skills and wire the bot
 
-Install `skills/codex/SKILL.md` and `skills/codex-setup/SKILL.md` into the agent's skill store. Then run
-`/codex-setup` in each bot that should dispatch (it creates the `codex-events` webhook routine, stores
-`~/.config/relaybot/webhooks/<slug>.json`, and sends a `test` event). Verify with:
+Install `skills/codex/SKILL.md` and `skills/relaybot-setup/SKILL.md` into the agent's skill store. When upgrading a bot with the old command, also refresh `skills/codex-setup/SKILL.md` with the forwarding alias.
 
-```bash
-~/bin/relaybot-doctor --webhook-test <slug>    # expect "sent 200"
-```
+Run `/relaybot-setup` in the dispatching bot's chat. It checks both CLIs and their sign-in status, reuses the bot's `codex-events` routine and slug, and sends one shared test. If a CLI is missing or signed out, finish the other route and webhook test. Give the user the missing CLI's install or sign-in instructions.
 
 ## 5. Report
 
-Tell the user: install prefix, config values set, doctor/selftest results,
-which bots are wired. List anything you could not do.
+Report the install prefix, config values set, doctor/selftest results, each CLI's status and the current bot's webhook result.

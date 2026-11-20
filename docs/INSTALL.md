@@ -24,8 +24,8 @@ Requirements: macOS or Linux, `bash`, `python3` (3.8+), a signed-in CLI for each
 4. Check: `relaybot-doctor` (read-only). From a clone, `tests/selftest.sh` runs an offline end-to-end
    test with stub Codex exec/app-server, Claude CLI and a local webhook. Pass an installed prefix to test that copy, e.g. `tests/selftest.sh ~/bin`.
 
-5. Install the skills into your agent: `skills/codex/SKILL.md` and `skills/codex-setup/SKILL.md`. Then,
-   in each bot that should dispatch to either target, send `/codex-setup` once.
+5. Install the skills into your agent: `skills/codex/SKILL.md` and `skills/relaybot-setup/SKILL.md`. Then,
+   in each bot that should dispatch to either target, send `/relaybot-setup` once. It checks installation and sign-in for both CLIs and tests their shared webhook. A missing or signed-out CLI can be added later by rerunning setup. To keep the old command on upgrade, refresh `skills/codex-setup/SKILL.md` alongside the new skill.
 
 ## Configuration
 
@@ -50,7 +50,7 @@ Environment variables win over `config.env`. All keys are optional.
 | `RELAYBOT_FORCE_EXEC` | empty | set to skip the app-server path (env only) |
 
 Webhook files: `~/.config/relaybot/webhooks/<slug>.json`, mode 600, shaped like
-[`examples/webhook.example.json`](../examples/webhook.example.json). `/codex-setup` writes them for you.
+[`examples/webhook.example.json`](../examples/webhook.example.json). `/relaybot-setup` writes them for you.
 Never commit them.
 
 ## Uninstall

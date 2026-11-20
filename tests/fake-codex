@@ -8,12 +8,23 @@ import sys
 import time
 
 cfg = json.loads(os.environ['FIXTURE'])
-run = Path(os.environ['RELAYBOT_RUN_DIR'])
 
 
 def trace(**fields):
     with Path(os.environ['TRACE']).open('a') as f:
         print(json.dumps(fields), file=f)
+
+
+if sys.argv[1:] in (['--version'], ['app-server', '--help']):
+    print('fixture codex')
+    sys.exit(0)
+if sys.argv[1:] == ['login', 'status']:
+    trace(argv=sys.argv[1:])
+    rc, message = cfg['codex_status']
+    print(message, file=sys.stderr)
+    sys.exit(rc)
+
+run = Path(os.environ['RELAYBOT_RUN_DIR'])
 
 
 def answer(method, **params):

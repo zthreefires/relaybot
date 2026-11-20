@@ -63,18 +63,14 @@ Flow, run directory, and event contract: [docs/ARCHITECTURE.md](docs/ARCHITECTUR
 
 ## Preconditions
 
-Check Python, Git and the CLI the user selected on the relaybot computer.
+Check Python and Git on the relaybot computer.
 
 ```bash
 command -v python3 && python3 --version          # need 3.8+
 command -v git
-# For Codex
-ls /Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex 2>/dev/null || command -v codex
-# For Claude Code
-command -v claude || test -x ~/.local/bin/claude
 ```
 
-If the selected CLI is missing or needs sign-in, ask the user. You also need a bot that can run shell commands on that computer and receive webhook routines (built for Grok Bot).
+You also need a bot that can run shell commands on that computer and receive webhook routines (built for Grok Bot). After installation, `relaybot-doctor` checks both CLIs using the paths selected by their runners.
 
 ## Install
 
@@ -105,20 +101,16 @@ Then:
 
 To test the installed copies instead of `bin/` in the clone, run `~/relaybot/tests/selftest.sh ~/bin`.
 
-3. Install [`skills/codex/SKILL.md`](skills/codex/SKILL.md) and [`skills/codex-setup/SKILL.md`](skills/codex-setup/SKILL.md) into this agent's skill store.
+3. Install [`skills/codex/SKILL.md`](skills/codex/SKILL.md) and [`skills/relaybot-setup/SKILL.md`](skills/relaybot-setup/SKILL.md) into this agent's skill store.
+   On upgrade, refresh the old skill alongside them to keep `/codex-setup` working as an alias. [Compatibility skill](skills/codex-setup/SKILL.md)
 
 ## Wire a bot
 
-In each bot that should dispatch work, run `/codex-setup` in that bot's own chat with the user present. Follow [`skills/codex-setup/SKILL.md`](skills/codex-setup/SKILL.md) exactly. It is safe to re-run: it refreshes the `codex-events` routine prompt if needed, never creates a second routine, and does not ask for the key again when a working config already exists.
+Run `/relaybot-setup` in the dispatching bot's own chat with the user present. One run sets up both `/codex` and `/claude`. [Setup skill](skills/relaybot-setup/SKILL.md)
 
-It will:
-
-1. Create or refresh this bot's `codex-events` webhook routine. The prompt is a short pointer to the `codex` skill; do not put event-handling logic in the routine.
-2. If there is no working webhook file yet, ask the user to paste the routine's webhook URL, then collect the key through a secret request (never as plain chat text).
-3. Write `~/.config/relaybot/webhooks/<slug>.json` as `{"url","key","bot"}`, directory mode 700, file mode 600. See [examples/webhook.example.json](examples/webhook.example.json).
-4. Send a `test` event: `~/bin/codex-notify <slug> test /tmp ~ "codex-setup connectivity test"`. Expect `sent 200`. A `queued` result or a 401/404 means the stored URL or key is stale; collect a fresh URL and key once and retest.
-
-Only set up the bot you are. Never create or edit routines for other bots. Event payload shape: [examples/event.example.json](examples/event.example.json).
+1. Check installation and sign-in for each CLI. If one needs attention, finish wiring the other and tell the user how to install the missing CLI, set its binary path or sign in themselves.
+2. Reuse this bot's `codex-events` routine and slug. Create the routine if missing, or refresh its prompt if needed. Collect the URL and key only when needed, using a secret request for the key. Store the config in `~/.config/relaybot/webhooks/<slug>.json`, with directory mode 700 and file mode 600. [Example config](examples/webhook.example.json)
+3. Send one shared `test` event and confirm it reaches this chat. Report the webhook result and the status of each CLI. The user can rerun setup after installing or signing in to a CLI. [Example event](examples/event.example.json)
 
 ## Dispatch a task
 
@@ -128,12 +120,12 @@ Use `/codex` or `/claude` and follow [`skills/codex/SKILL.md`](skills/codex/SKIL
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/usage-dark-en.svg">
     <source media="(prefers-color-scheme: light)" srcset="assets/usage-light-en.svg">
-    <img alt="A Grok Bot chat: /codex-setup wires the bot once (webhook URL, masked key, test event); then /codex fix the flaky login test starts Codex in ~/code/my-app, a needs_auth card asks to approve npm install, the user replies go ahead, and a done card reports the result with codex resume &lt;session-id&gt;" src="assets/usage-light-en.svg" width="100%">
+    <img alt="A Grok Bot chat: /relaybot-setup wires the bot once (webhook URL, masked key, test event); then /codex fix the flaky login test starts Codex in ~/code/my-app, a needs_auth card asks to approve npm install, the user replies go ahead, and a done card reports the result with codex resume &lt;session-id&gt;" src="assets/usage-light-en.svg" width="100%">
   </picture>
 </p>
 
 ```text
-/codex-setup                      # once per bot; safe to re-run
+/relaybot-setup                      # once per bot; safe to re-run
 /codex <what the user wants done>
 /claude <what the user wants done>
 ```
@@ -150,9 +142,9 @@ After install:
 - `~/bin/relaybot-doctor` prints `summary: … fail` and should contain `0 fail`. Warnings are acceptable.
 - `~/relaybot/tests/selftest.sh` (or with `~/bin`) prints `selftest passed`. It uses stub Codex and Claude CLIs and a local webhook. It does not call a real desktop or an external URL.
 
-After `/codex-setup`:
+After `/relaybot-setup`:
 
-- `~/bin/relaybot-doctor --webhook-test <slug>` should print `sent 200`.
+- Each CLI has its own sign-in result. To repeat the shared webhook check, run `~/bin/relaybot-doctor --webhook-test <slug>` and look for `sent 200` or another 2xx.
 - The `codex-events` routine should then report in this chat that the webhook works.
 
 A queued webhook, including a redirect, is a delivery failure. It is written to `~/.config/relaybot/outbox.jsonl` without credentials. There is no automatic retry. Do not rerun the task just because delivery queued.
@@ -161,7 +153,7 @@ A queued webhook, including a redirect, is a delivery failure. It is written to 
 
 Ask the user only for things you cannot do yourself:
 
-- Install or sign in to the selected CLI when needed.
+- Install or sign in to each pending CLI when needed.
 - Config values they care about (`RELAYBOT_REPOS_ROOT`, `RELAYBOT_DEFAULT_WORKDIR`, model and effort).
 - Pasting the `codex-events` routine's webhook URL, and providing the key through a secret request.
 - Creating a Codex desktop project for the default or fallback workdir, if they want those runs filed in the desktop app.

@@ -217,6 +217,51 @@ class Runs(unittest.TestCase):
         self.env['RELAYBOT_CLAUDE_BIN'] = str(local)
         self.assertEqual(subprocess.check_output(argv, env=self.env, text=True).strip(), str(local))
 
+    def test_setup_checks_both_clis_and_one_shared_webhook(self):
+        (self.home / 'config.env').write_text('RELAYBOT_EXTRA_PATH=' + str(STUB.parent) + '\n')
+        codex_ok = (0, 'Logged in using ChatGPT')
+        codex_out = (1, 'Not logged in')
+        claude_ok = (0, dict(loggedIn=True, email='private-fixture@example.invalid'))
+        claude_out = (1, dict(loggedIn=False))
+        for codex, claude, results in [
+            (codex_ok, claude_ok, ('Codex signed in', 'Claude Code signed in')),
+            (None, claude_ok, ('Codex unavailable', 'Claude Code signed in')),
+            (codex_ok, None, ('Codex signed in', 'Claude Code unavailable')),
+            (codex_out, claude_ok, ('Codex signed out', 'Claude Code signed in')),
+            (codex_ok, claude_out, ('Codex signed in', 'Claude Code signed out')),
+            ((1, 'private-fixture error'), (1, {}), ('Codex login unverified', 'Claude Code login unverified')),
+        ]:
+            with self.subTest(results=results):
+                env = dict(self.env, FIXTURE=json.dumps(dict(codex_status=codex, claude_status=claude)))
+                missing = str(self.root / 'missing')
+                env['RELAYBOT_CODEX_BIN'] = 'fake-codex' if codex else missing
+                env['RELAYBOT_CLAUDE_BIN'] = 'fake-claude' if claude else missing
+                proc = subprocess.run([BIN / 'relaybot-doctor', '--webhook-test', 'test'], env=env,
+                                      capture_output=True, text=True, timeout=20)
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                for status in results:
+                    self.assertIn(status, proc.stdout)
+                self.assertNotIn('private-fixture', proc.stdout + proc.stderr)
+                self.assertNotIn('synthetic-test-value', proc.stdout + proc.stderr)
+                self.assertIn('sent 200', proc.stdout)
+                self.assertEqual([c[2]['event'] for c in self.server.calls], ['test'])
+                self.server.calls.clear()
+                expected = []
+                if codex:
+                    expected.append(['login', 'status'])
+                if claude:
+                    expected.append(['auth', 'status', '--json'])
+                self.assertCountEqual([r['argv'] for r in self.records()], expected)
+                self.trace.write_text('')
+
+        self.endpoint(503)
+        env = dict(self.env, FIXTURE=json.dumps(dict(codex_status=codex_ok, claude_status=claude_ok)))
+        proc = subprocess.run([BIN / 'relaybot-doctor', '--webhook-test', 'test'], env=env,
+                              capture_output=True, text=True, timeout=20)
+        self.assertNotEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn('queued: HTTP 503', proc.stdout)
+        self.assertEqual([c[2]['event'] for c in self.server.calls], ['test'])
+
     def test_prompt_is_task_verbatim(self):
         for backend in ('exec', 'app'):
             self.trace.write_text('')

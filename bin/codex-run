@@ -8,11 +8,6 @@ agent=codex
 if [ "${0##*/}" = claude-run ]; then agent=claude; fi
 runner="$agent-run"
 print_flag="--print-$agent-bin"
-if [ "${1:-}" != "$print_flag" ] && [ $# -lt 3 ]; then
-  echo "usage: $runner <bot> <workdir|-> <task_file> [resume]" >&2
-  exit 2
-fi
-bot=${1:-}; workdir=${2:-}; task=${3:-}; mode=${4:-}
 
 RELAYBOT_HOME=${RELAYBOT_HOME:-$HOME/.config/relaybot}
 if [ -f "$RELAYBOT_HOME/config.env" ]; then
@@ -41,7 +36,20 @@ else
   export RELAYBOT_CODEX_BIN
   binary=$RELAYBOT_CODEX_BIN
 fi
-if [ "${1:-}" = "$print_flag" ]; then echo "$binary"; exit 0; fi
+if [ "${1:-}" = "$print_flag" ]; then
+  command -v -- "$binary" || printf '%s\n' "$binary"
+  exit 0
+fi
+# The doctor probes with the runner's PATH (some CLI launchers need Node there).
+if [ $# -eq 1 ] && [ "$1" = "--login-status" ]; then
+  if [ "$agent" = claude ]; then exec "$binary" auth status --json; fi
+  exec "$binary" login status
+fi
+if [ $# -lt 3 ]; then
+  echo "usage: $runner <bot> <workdir|-> <task_file> [resume]" >&2
+  exit 2
+fi
+bot=$1; workdir=$2; task=$3; mode=${4:-}
 PY=${RELAYBOT_PYTHON:-$(command -v python3 || echo /usr/bin/python3)}
 RUN_ROOT=${RELAYBOT_RUN_ROOT:-/tmp}
 

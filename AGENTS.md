@@ -13,8 +13,8 @@ Codex app-server threads are visible in the desktop. Claude uses the local CLI.
 - `bin/codex-app-run`: Codex app-server client (python3); desktop-visible threads, project pick, IPC refresh.
 - `bin/codex-notify`: webhook poster with per-pause dedupe (python3).
 - `bin/codex-relay-hook`: shared turn-status resolver and pause recorder (not a Codex hook; relaybot passes no hooks).
-- `bin/relaybot-doctor`: read-only self-check.
-- `skills/codex`, `skills/codex-setup`: agent skills (SKILL.md with YAML frontmatter).
+- `bin/relaybot-doctor`: checks the install and each CLI's sign-in status. An explicit `--webhook-test` sends a test event.
+- `skills/codex` dispatches to either runner. `skills/relaybot-setup` checks both and wires one webhook per bot. `skills/codex-setup` forwards the legacy command.
 - `docs/ARCHITECTURE.md`: flow, run dir, event contract. `docs/INSTALL.md`, `docs/USAGE.md`,
   `docs/INSTALL_FOR_AGENTS.md`.
 - `config.example.env`, `examples/`: sample config, webhook file, event, task, routine prompt.

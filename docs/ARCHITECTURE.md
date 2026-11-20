@@ -143,7 +143,7 @@ Headers: `Content-Type: application/json`, `Authorization: Bearer <key>`, `X-Aut
 | `done` | the turn completed with a final reply and no pause was recorded | read `reply`: report the result, relay the agent's question, or say what blocks it |
 | `needs_auth` | Codex requested approval/input or Claude reported one of the pause signals above | tell the user what the agent requested (`message`, `status.json` `reason`) and any final reply (`reply`); continue only after they agree |
 | `failed` | nonzero exit (app-server error, interrupted, killed, exec failure, resume mismatch), or no final reply | report the reason and log tail |
-| `test` | `/codex-setup` or `relaybot-doctor --webhook-test` | confirm the webhook works |
+| `test` | `/relaybot-setup` or `relaybot-doctor --webhook-test` | confirm the webhook works |
 
 Delivery: only a direct HTTP 2xx counts. Redirects (301, 302, 303, 307, 308) and other failures are
 queued in `$RELAYBOT_HOME/outbox.jsonl` without credentials; there is no automatic retry, and queuing
