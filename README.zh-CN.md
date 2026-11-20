@@ -102,7 +102,6 @@ git clone https://github.com/zthreefires/relaybot.git ~/relaybot 2>/dev/null || 
 若要测已安装的脚本而不是仓库里的 `bin/`，运行 `~/relaybot/tests/selftest.sh ~/bin`。
 
 3. 把 [`skills/codex/SKILL.md`](skills/codex/SKILL.md) 和 [`skills/relaybot-setup/SKILL.md`](skills/relaybot-setup/SKILL.md) 装进当前 agent 的技能库。
-   升级已有 bot 时，同时更新旧技能，原来的 `/codex-setup` 就会转到新流程。[兼容技能](skills/codex-setup/SKILL.md)
 
 ## 给 bot 接线
 

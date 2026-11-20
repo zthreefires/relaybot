@@ -17,7 +17,6 @@ The personal agent keeps the context and writes the full prompt; the user picks 
 
 - [skills/codex/SKILL.md](skills/codex/SKILL.md): /codex or /claude, dispatch a task and handle events
 - [skills/relaybot-setup/SKILL.md](skills/relaybot-setup/SKILL.md) checks Codex and Claude Code independently and tests their shared webhook.
-- [skills/codex-setup/SKILL.md](skills/codex-setup/SKILL.md) forwards the legacy /codex-setup command to /relaybot-setup.
 
 ## Optional
 
