@@ -1,0 +1,25 @@
+# relaybot
+
+> Dispatch Codex (Claude Code planned) from a chat bot or personal agent such as Grok Bot: remote-control local Codex on your own computer, get a webhook callback when the coding agent finishes, fails, or needs approval, and resume the same Codex session afterwards. Runs show up in the Codex desktop app under the matching project.
+
+The personal agent keeps the context and writes the full prompt; the user picks the coding agent explicitly; tasks use the user's Codex plan quota; sessions are managed for them.
+
+## Docs
+
+- [README](README.md): what it solves, when to use it, status
+- [AGENTS.md](AGENTS.md): layout, config keys, self-check commands
+- [Install for agents](docs/INSTALL_FOR_AGENTS.md): end-to-end install and verification steps
+- [Install](docs/INSTALL.md): manual install and configuration reference
+- [Usage](docs/USAGE.md): /codex and /codex-setup
+- [Architecture](docs/ARCHITECTURE.md): app-server flow, projectId, desktop refresh, hooks, webhook event contract
+
+## Skills
+
+- [skills/codex/SKILL.md](skills/codex/SKILL.md): /codex, dispatch a task and handle events
+- [skills/codex-setup/SKILL.md](skills/codex-setup/SKILL.md): /codex-setup, wire a bot's webhook
+
+## Optional
+
+- [config.example.env](config.example.env)
+- [examples/](examples/)
+- [tests/selftest.sh](tests/selftest.sh)

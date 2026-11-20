@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""Offline exec and app-server fixtures. Record exactly what the runner dispatches."""
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+cfg = json.loads(os.environ['FIXTURE'])
+run = Path(os.environ['RELAYBOT_RUN_DIR'])
+
+
+def trace(**fields):
+    with Path(os.environ['TRACE']).open('a') as f:
+        print(json.dumps(fields), file=f)
+
+
+def answer(method, **params):
+    print(json.dumps(dict(method=method, params=params)), flush=True)
+
+
+def turn(sid, text):
+    trace(turn=sid, input=text)
+    if cfg.get('hold'):
+        gate = Path(cfg['hold'])
+        gate.touch()
+        for _ in range(400):
+            if not gate.exists():
+                break
+            time.sleep(0.025)
+    (Path(os.environ['WORK']) / 'source.txt').touch()
+    if 'pause' in cfg:
+        subprocess.run(['codex-notify', 'test', cfg['pause'], str(run), os.environ['WORK'], 'explicit reason'], check=True)
+    if cfg.get('early_done'):
+        x = subprocess.run(['codex-notify', 'test', 'done', str(run), os.environ['WORK'], 'premature'])
+        trace(premature_rc=x.returncode)
+    return cfg.get('reply')
+
+
+sid = cfg.get('sid', 'session-a')
+trace(argv=sys.argv[1:])
+if 'exec' in sys.argv:
+    text = sys.stdin.read()
+    if 'resume' in sys.argv:
+        sid = sys.argv[sys.argv.index('resume') + 1]
+        if sid == 'unknown':
+            sys.exit(7)
+    print('session id:', sid)
+    reply = turn(sid, text)
+    if reply is not None:
+        Path(sys.argv[sys.argv.index('-o') + 1]).write_text(reply)
+    sys.exit(cfg.get('rc', 0))
+
+for line in sys.stdin:
+    req = json.loads(line)
+    method = req.get('method')
+    if not method or 'id' not in req:
+        continue
+    p = req.get('params', {})
+    trace(method=method, params=p)
+    result, error = {}, None
+    if method == 'initialize' and cfg.get('fallback'):
+        sys.exit(1)
+    if method == 'project/list':
+        result = {'data': cfg.get('projects', [])}
+    elif method == 'project/create':
+        if cfg.get('create_error'):
+            error = 'creation unavailable'
+        else:
+            result = {'project': dict(id='created', name=p['name'], roots=p['roots'])}
+    elif method in ('thread/resume', 'thread/start'):
+        sid = p.get('threadId', sid)
+        if sid == 'unknown':
+            error = 'unknown thread'
+        result = {'thread': {'id': sid}}
+    elif method == 'turn/start':
+        result = {'turn': {'id': 'turn'}}
+    print(json.dumps({'id': req['id'], 'error': {'message': error}} if error else
+                     {'id': req['id'], 'result': result}), flush=True)
+    if method == 'turn/start':
+        if cfg.get('approval'):
+            print(json.dumps({'id': 'approval', 'method': 'item/commandExecution/requestApproval',
+                              'params': {'threadId': sid, 'command': 'approve this'}}), flush=True)
+            sys.stdin.readline()
+        reply = turn(sid, p['input'][0]['text'])
+        if reply is not None:
+            answer('item/completed', threadId=sid, turnId=cfg.get('reply_turn', 'turn'),
+                   item={'type': 'agentMessage', 'text': reply, 'phase': cfg.get('phase')})
+        answer('turn/completed', threadId=sid, turn={'status': 'completed', 'id': 'turn'})

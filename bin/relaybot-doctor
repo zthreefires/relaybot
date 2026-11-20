@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# relaybot-doctor [--webhook-test <bot>]
+# Read-only self-check of a relaybot install. Prints what it finds; never prints webhook keys.
+# --webhook-test <bot>  also POSTs a `test` event to <bot>'s webhook (expect "sent 200").
+# shellcheck disable=SC2015
+set -u
+here=$(cd "$(dirname "$0")" && pwd)
+RELAYBOT_HOME=${RELAYBOT_HOME:-$HOME/.config/relaybot}
+ok=0; warn=0; bad=0
+pass() { echo "ok    $*"; ok=$((ok+1)); }
+note() { echo "warn  $*"; warn=$((warn+1)); }
+fail() { echo "FAIL  $*"; bad=$((bad+1)); }
+
+PY=${RELAYBOT_PYTHON:-$(command -v python3 || true)}
+if [ -n "$PY" ] && [ -x "$PY" ]; then pass "python3: $PY"; else fail "python3 not found (set RELAYBOT_PYTHON)"; fi
+
+for s in codex-run codex-app-run codex-notify codex-relay-hook; do
+  if [ -x "$here/$s" ]; then pass "script: $here/$s"; else fail "missing or not executable: $here/$s"; fi
+done
+bash -n "$here/codex-run" 2>/dev/null && pass "codex-run parses" || fail "codex-run has a syntax error"
+for s in codex-app-run codex-notify codex-relay-hook; do
+  "$PY" -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$here/$s" 2>/dev/null && pass "$s parses" || fail "$s has a syntax error"
+done
+
+if [ -f "$RELAYBOT_HOME/config.env" ]; then pass "config: $RELAYBOT_HOME/config.env"; else note "no $RELAYBOT_HOME/config.env (defaults apply; see config.example.env)"; fi
+
+codex_bin=$("$here/codex-run" --print-codex-bin 2>/dev/null)
+if [ -n "$codex_bin" ] && [ -x "$codex_bin" ]; then
+  pass "codex: $codex_bin ($("$codex_bin" --version 2>/dev/null | head -1))"
+  "$codex_bin" app-server --help >/dev/null 2>&1 && pass "codex app-server available" \
+    || note "codex app-server not available: runs will use the exec fallback (not visible in the desktop)"
+else
+  fail "codex binary not found (set RELAYBOT_CODEX_BIN)"
+fi
+
+[ -S "$HOME/.codex/ipc/ipc.sock" ] && pass "desktop IPC socket present (live sidebar refresh)" \
+  || note "no ~/.codex/ipc/ipc.sock: desktop not running; threads appear after it next loads"
+
+wh="$RELAYBOT_HOME/webhooks"
+if [ -d "$wh" ]; then
+  perm=$(stat -c %a "$wh" 2>/dev/null || stat -f %Lp "$wh")
+  [ "$perm" = 700 ] && pass "webhooks dir $wh (700)" || note "webhooks dir $wh is $perm, expected 700"
+  for f in "$wh"/*.json; do
+    [ -e "$f" ] || { note "no webhook configs yet (run /codex-setup in a bot)"; break; }
+    "$PY" - "$f" <<'P' && pass "webhook $(basename "$f" .json): url/key/bot present" || fail "webhook $(basename "$f"): bad or incomplete json"
+import json, sys
+d = json.load(open(sys.argv[1]))
+sys.exit(0 if all(d.get(k) for k in ("url", "key", "bot")) else 1)
+P
+  done
+else
+  note "no $wh yet (created by install.sh or /codex-setup)"
+fi
+
+
+if [ "${1:-}" = "--webhook-test" ] && [ -n "${2:-}" ]; then
+  echo; echo "webhook test for $2:"
+  "$here/codex-notify" "$2" test /tmp "$HOME" "relaybot-doctor connectivity test"
+fi
+echo; echo "summary: $ok ok, $warn warn, $bad fail"
+[ $bad -eq 0 ]

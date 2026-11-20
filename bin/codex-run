@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# codex-run <bot> <workdir|-> <task_file> [resume]
+# codex-run --print-codex-bin      (print the codex binary that would be used)
+#
+# Runs one Codex task (or continues one with `resume`) in <workdir>, then posts exactly one
+# event (done / needs_auth / failed) to the webhook configured for <bot>. The prompt Codex sees
+# is the task file verbatim: relaybot adds no instructions and passes no hooks. The event comes
+# from system signals only; the receiver reads the final reply (last.md) for what Codex said.
+# Preferred path: codex-app-run (Codex app-server, so the thread shows in the Codex desktop).
+# Fallback when the app-server can't start (exit 97): plain `codex exec` (not visible in desktop).
+#
+# Configuration: environment variables, or KEY=VALUE lines in $RELAYBOT_HOME/config.env
+# (default ~/.config/relaybot/config.env). See config.example.env.
+set -u
+
+print_flag=""; case ${1:-} in --print-codex-bin) print_flag=$1 ;; esac
+if [ -z "$print_flag" ] && [ $# -lt 3 ]; then
+  sed -n '2,13p' "$0" >&2
+  exit 2
+fi
+bot=${1:-}; workdir=${2:-}; task=${3:-}; mode=${4:-}
+
+RELAYBOT_HOME=${RELAYBOT_HOME:-$HOME/.config/relaybot}
+if [ -f "$RELAYBOT_HOME/config.env" ]; then
+  # Values already in the environment win over the file.
+  while IFS='=' read -r k v; do
+    case $k in ''|\#*) continue ;; esac
+    k=$(printf '%s' "$k" | tr -d '[:space:]')
+    case $k in RELAYBOT_*) ;; *) continue ;; esac
+    v=${v%\"}; v=${v#\"}
+    if [ -z "${!k:-}" ]; then export "$k=${v/#\~/$HOME}"; fi
+  done < "$RELAYBOT_HOME/config.env"
+fi
+export RELAYBOT_HOME
+
+here=$(cd "$(dirname "$0")" && pwd)
+[ -n "${RELAYBOT_EXTRA_PATH:-}" ] && PATH="$RELAYBOT_EXTRA_PATH:$PATH"
+PATH="$here:$PATH"; export PATH
+
+# Codex binary: explicit setting, else the one bundled with the desktop app (versions match),
+# else whatever `codex` is on PATH.
+DESKTOP_CODEX=/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex
+if [ -z "${RELAYBOT_CODEX_BIN:-}" ]; then
+  if [ -x "$DESKTOP_CODEX" ]; then RELAYBOT_CODEX_BIN=$DESKTOP_CODEX; else RELAYBOT_CODEX_BIN=$(command -v codex || echo codex); fi
+fi
+export RELAYBOT_CODEX_BIN
+CODEX=$RELAYBOT_CODEX_BIN
+PY=${RELAYBOT_PYTHON:-$(command -v python3 || echo /usr/bin/python3)}
+RUN_ROOT=${RELAYBOT_RUN_ROOT:-/tmp}
+if [ "$print_flag" = --print-codex-bin ]; then echo "$CODEX"; exit 0; fi
+
+model_args=(); [ -n "${RELAYBOT_MODEL:-}" ] && model_args=(-m "$RELAYBOT_MODEL")
+effort_args=(); [ -n "${RELAYBOT_EFFORT:-}" ] && effort_args=(-c "model_reasoning_effort=\"$RELAYBOT_EFFORT\"")
+
+# "-" (or empty) means the default workdir for tasks tied to no existing project.
+if [ -z "$workdir" ] || [ "$workdir" = - ]; then workdir=${RELAYBOT_DEFAULT_WORKDIR:-$HOME/Documents/relaybot}; fi
+die() { echo "codex-run: $*" >&2; exit 1; }
+[ -f "$task" ] && [ -r "$task" ] || die "cannot read task file: $task"
+mkdir -p "$workdir" || die "cannot open workdir: $workdir"
+
+sid=""
+if [ "$mode" = resume ]; then
+  run=$(cd "$(dirname "$task")" && pwd) || die "cannot open run directory"
+  [[ ${run##*/} = codex-run-?* && -O $run && ! -L $run && -f $run/task.md && -f $run/prompt.md && -f $run/pause ]] ||
+    die "not an owned relaybot run directory: $run"
+else
+  mkdir -p "$RUN_ROOT" || die "cannot create run root"
+  run=$(mktemp -d "$RUN_ROOT/codex-run-XXXXXXXX") || die "cannot create private run directory"
+  run=$(cd "$run" && pwd) || die "cannot open run directory"
+fi
+# flock the open directory description inherited from bash. The kernel releases
+# the lock on exit, including after a crash. No platform-specific flock CLI.
+exec 9< "$run" || die "cannot open run directory"
+"$PY" -c 'import fcntl; fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)' 2>/dev/null ||
+  die "run already in progress or cannot lock: $run"
+if [ "$mode" = resume ]; then
+  sid=$(cat "$run/session") || die "cannot read session ID: $run/session"
+  [[ -n $sid && $sid != -* && $sid != *[[:space:]]* ]] || die "invalid session ID in $run/session"
+  export RELAYBOT_RESUME_ID=$sid
+fi
+turn=$(mktemp -d "$run/turn-XXXXXXXX") || die "cannot create private turn directory"
+if ! cat "$task" > "$turn/input.md"; then
+  rm -f "$turn/input.md"
+  rmdir "$turn"
+  if [ "$mode" != resume ]; then rmdir "$run"; fi
+  die "cannot snapshot task: $task"
+fi
+if [ "$mode" = resume ]; then
+  chmod 700 "$run" || die "cannot secure run directory"
+  if [ -e "$run/last.md" ]; then
+    mv "$run/last.md" "$turn/previous-last.md" || die "cannot archive previous reply"
+  fi
+else
+  cp "$turn/input.md" "$run/task.md" || die "cannot save task"
+fi
+export RELAYBOT_RUN_DIR=$run RELAYBOT_TURN_DIR=$turn
+# The prompt is the task, verbatim. Nothing is appended (it would show in the desktop thread).
+cat "$turn/input.md" > "$run/prompt.md" || die "cannot prepare prompt"
+echo $$ > "$run/pid" || die "cannot save pid"
+echo "${turn##*/}" > "$turn/pause" || die "cannot save pause"
+mv "$turn/pause" "$run/pause" || die "cannot switch turn"
+rm -f "$run/status.json" "$run/exit" || die "cannot clear previous result"
+
+: >> "$run/log.txt" || die "cannot open run log"
+log_start=$(wc -c < "$run/log.txt") || die "cannot read log size"
+rc=97
+if [ -x "$here/codex-app-run" ] && [ -z "${RELAYBOT_FORCE_EXEC:-}" ]; then
+  "$here/codex-app-run" "$bot" "$workdir" "$run" "$mode" >> "$run/log.txt" 2>&1
+  rc=$?
+fi
+if [ $rc -eq 97 ]; then
+  echo "[codex-run] app-server path unavailable, falling back to codex exec" >> "$run/log.txt"
+  opts=(${model_args[@]+"${model_args[@]}"} ${effort_args[@]+"${effort_args[@]}"} --skip-git-repo-check -o "$turn/reply.md" -)
+  # Keep the live log and scope the session header to this invocation.
+  offset=$(wc -c < "$run/log.txt") || die "cannot read log size"
+  if [ "$mode" = resume ]; then
+    (cd "$workdir" && "$CODEX" exec resume "$sid" "${opts[@]}") < "$run/prompt.md" >> "$run/log.txt" 2>&1
+  else
+    "$CODEX" exec -C "$workdir" "${opts[@]}" < "$run/prompt.md" >> "$run/log.txt" 2>&1
+  fi
+  rc=$?
+  header=$(tail -c "+$((offset+1))" "$run/log.txt" | awk '/^session id: / {print $3; exit}')
+  if [ "$mode" != resume ] && [ -n "$header" ]; then
+    echo "$header" > "$run/session" || die "cannot save session ID"
+  elif [ "$mode" = resume ] && [ -n "$header" ] && [ "$header" != "$sid" ]; then
+    echo "[codex-run] resumed a different session from the requested ID" >> "$run/log.txt"
+    [ "$rc" != 0 ] || rc=1
+  fi
+fi
+if [ -s "$turn/reply.md" ]; then
+  mv "$turn/reply.md" "$run/last.md" || die "cannot publish reply"
+fi
+if [ -f "$run/session" ]; then sid=$(cat "$run/session"); fi
+result=$("$PY" "$here/codex-relay-hook" --result "$rc" "$log_start") || die "cannot resolve turn status"
+st=${result%%$'\n'*}
+why=${result#*$'\n'}
+if [ "$st" = failed ] && [ "$rc" = 0 ]; then rc=1; fi
+echo "$rc" > "$run/exit" || die "cannot save exit code"
+"$here/codex-notify" --final "$bot" "$st" "$run" "$workdir" "$why"
+echo "run_dir=$run exit=$rc session=$sid status=$st"
+exit "$rc"

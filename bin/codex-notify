@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""codex-notify [--final] <bot> <event> <run_dir> <workdir> [message]
+
+During a turn: `codex-notify <bot> needs_auth <run_dir> <workdir> <reason>` records the turn's
+first pause (codex-app-run calls it on approval/permission/user-input requests); nothing is sent.
+--final (codex-run only): POST the turn's single event. `test` events are sent directly.
+Payload: see docs/ARCHITECTURE.md "Webhook events". Delivery failures go to outbox.jsonl.
+"""
+import fcntl
+import json
+import os
+from pathlib import Path
+import sys
+import time
+import urllib.error
+import urllib.request
+
+
+REPLY_MAX = 8000
+
+
+def read(path):
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+class DirectPost(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def reserve(run, pause, event):
+    with (run / "notified.jsonl").open("a+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.seek(0)
+        if any(json.loads(line).get("pause") == pause for line in f if line.strip()):
+            return False
+        print(json.dumps(dict(pause=pause, slot="final", event=event, ts=int(time.time()))), file=f)
+        return True
+
+
+def main():
+    args = sys.argv[1:]
+    final = args[:1] == ["--final"]
+    if final:
+        args = args[1:]
+    if len(args) not in (4, 5):
+        sys.exit(__doc__)
+    bot, event, run_dir, workdir = args[:4]
+    msg = args[4] if len(args) == 5 else ""
+    run = Path(run_dir)
+    try:
+        pause = (run / "pause").read_text().strip() if event != "test" else ""
+    except FileNotFoundError:
+        pause = ""
+    if not final and pause.startswith("turn-"):
+        if event not in ("needs_auth", "blocked"):
+            sys.exit("codex-notify: codex-run sends the final event")
+        # The prompt also works in a clean tool environment without relaybot variables.
+        turn = Path(os.environ.get("RELAYBOT_TURN_DIR") or run / pause)
+        if turn.parent.resolve() != run.resolve() or turn.name != pause:
+            sys.exit("codex-notify: stale pause request")
+        env = dict(os.environ, RELAYBOT_RUN_DIR=run_dir, RELAYBOT_TURN_DIR=str(turn))
+        hook = Path(__file__).with_name("codex-relay-hook")
+        os.execve(sys.executable, [sys.executable, str(hook), "--request", event, msg], env)
+    if pause and not reserve(run, pause, event):
+        print("dedup: already reported this pause")
+        return
+    extra = {}
+    if event != "test":
+        sid = read(run / "session").strip() or None
+        if sid and "codex resume" not in msg:
+            msg = f"View session: codex resume {sid}\n" + msg
+        reply = read(run / "last.md")
+        code = read(run / "exit").strip()
+        extra = dict(session_id=sid, exit_code=int(code) if code.lstrip("-").isdigit() else None,
+                     reply=reply[:REPLY_MAX], reply_truncated=len(reply) > REPLY_MAX,
+                     reply_file=str(run / "last.md") if reply else None)
+    base = Path(os.environ.get("RELAYBOT_HOME") or "~/.config/relaybot").expanduser()
+    body = dict(event=event, run_id=run.name, run_dir=run_dir, workdir=workdir, message=msg[:2000],
+                ts=int(time.time()), **extra)
+    try:
+        cfg = json.loads((base / "webhooks" / (bot + ".json")).read_text())
+        req = urllib.request.Request(cfg["url"], data=json.dumps(body).encode(), method="POST", headers={
+            "Content-Type": "application/json", "Authorization": "Bearer " + cfg["key"], "X-Automation-Key": cfg["key"]})
+        with urllib.request.build_opener(DirectPost()).open(req, timeout=8) as response:
+            if 200 <= response.status < 300:
+                print("sent", response.status)
+                return
+            error = f"HTTP {response.status}"
+    except urllib.error.HTTPError as e:
+        error = f"HTTP {e.code}"
+        e.close()
+    except Exception as e:
+        error = type(e).__name__  # URLs, response text and exception details can contain secrets
+    base.mkdir(parents=True, exist_ok=True)
+    with (base / "outbox.jsonl").open("a") as f:
+        print(json.dumps({"bot": bot, "error": error, **body}), file=f)
+    print("queued:", error)
+
+
+if __name__ == "__main__":
+    main()

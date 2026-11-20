@@ -1,0 +1,53 @@
+# Usage
+
+## /codex-setup (once per bot)
+
+Send `/codex-setup` in the chat of the bot that should dispatch to Codex. It:
+
+1. creates the bot's `codex-events` webhook routine, or refreshes its prompt if it exists;
+2. asks you for the routine's webhook URL and key (the key through a secret request), only when there is no
+   working config yet;
+3. writes `~/.config/relaybot/webhooks/<slug>.json` on your computer (mode 600);
+4. sends a `test` event; the bot then tells you the webhook works.
+
+Re-running is safe: a wired bot only gets its routine prompt refreshed and a new test.
+
+## /codex (each task)
+
+```
+/codex add a --dry-run flag to the export command in example-repo, with a test
+```
+
+The bot:
+
+1. picks the working dir: the folder you named, else the existing clone under `RELAYBOT_REPOS_ROOT`,
+   else asks; tasks tied to no project go to the default workdir;
+2. writes the full prompt from what it knows and starts `codex-run` in the background;
+3. tells you it started. The thread is visible in the Codex desktop sidebar, under the matching project,
+   titled `[<bot>] <first line>`. Don't type into it while it runs.
+
+When the turn ends, one event comes back and the bot reads Codex's final reply: it reports what Codex
+did, or relays the question Codex asked or what is blocking it, and includes `codex resume <id>`. If the
+app-server asked for an approval or your input during the turn (`needs_auth`), the bot tells you what
+was needed. After you answer or agree, the bot resumes the same session with your reply. relaybot adds
+nothing to the prompt Codex sees, so the thread reads like a task you typed and you can continue it in
+the desktop by hand.
+
+## Running the scripts by hand
+
+```bash
+echo "Summarize the README" > /tmp/task.md
+codex-run my-bot ~/path/to/repo /tmp/task.md          # new run
+codex-run my-bot - /tmp/task.md                         # default workdir
+echo "Done, continue" > /tmp/codex-run-.../followup.md
+codex-run my-bot ~/path/to/repo /tmp/codex-run-.../followup.md resume
+codex-notify my-bot test /tmp ~ "hello"                 # webhook test
+```
+
+At a Git worktree root the app-server reuses a matching project or creates one with the folder name. A linked worktree (`git worktree add`, or Codex's `~/.codex/worktrees/*/<repo>`) with no exact-root project uses the main repository's project, creating it for the main root (named after the main folder) if none exists; the thread's cwd stays the worktree. A worktree subdirectory or a non-Git folder uses the fallback project. Configure its root with `RELAYBOT_PROJECT_FALLBACK_ROOT`. A project creation error is logged in `log.txt` and the task continues.
+
+Keep the full `run_dir` from the summary. Resume snapshots `followup.md` and requires the original ID in `session`. If the ID is missing, recover it from the original log before retrying. An unreadable input or busy run leaves the prior turn usable. During a valid resume, `last.md` can be absent until a fresh reply is published.
+
+The last output line is `run_dir=... exit=... session=... status=...`, with status `done`, `needs_auth` or `failed`. `done` and `needs_auth` return 0. A runner failure keeps its nonzero exit code; a clean exit with no final reply is `failed` with exit 1. The webhook event carries the same status plus the reply; see [the event contract](ARCHITECTURE.md#webhook-events).
+
+Configure the final webhook URL directly. The receiver must return 2xx. A redirect or delivery error queues the event in `outbox.jsonl`. Check the queue for delivery issues before considering another task launch.

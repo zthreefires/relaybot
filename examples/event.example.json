@@ -1,0 +1,13 @@
+{
+  "event": "done",
+  "run_id": "codex-run-AbC123xy",
+  "run_dir": "/tmp/codex-run-AbC123xy",
+  "workdir": "/path/to/repos/example-repo",
+  "message": "View session: codex resume 00000000-0000-0000-0000-000000000000\nThe build needs a 2FA code for the package registry. Send it and I will publish.",
+  "ts": 1767240000,
+  "session_id": "00000000-0000-0000-0000-000000000000",
+  "exit_code": 0,
+  "reply": "The build needs a 2FA code for the package registry. Send it and I will publish.",
+  "reply_truncated": false,
+  "reply_file": "/tmp/codex-run-AbC123xy/last.md"
+}

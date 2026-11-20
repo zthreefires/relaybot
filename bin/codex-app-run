@@ -1,0 +1,488 @@
+#!/usr/bin/env python3
+"""codex-app-run <bot> <workdir> <run_dir> [resume]
+
+Runs one Codex turn through `codex app-server`, so the thread is an interactive
+(source=vscode) thread that shows up in the Codex desktop, filed under the matching
+project. Called by codex-run; prints a readable log to stdout (codex-run redirects it
+to run/log.txt).
+
+Reads  run/prompt.md (turn input, sent verbatim), run/task.md (thread title), run/session (resume).
+Approval, permission and user-input requests from the app-server are declined (nobody is at the
+keyboard) and recorded once per turn as a needs_auth pause via codex-notify; codex-run then sends
+needs_auth as the turn's single event.
+Writes run/session (thread id, immediately), the current turn's reply.md (last agent message).
+After turn/start, on item completion (at most every 15s) and at the end, it pings the
+desktop over ~/.codex/ipc/ipc.sock ("thread-unarchived" broadcast) so the desktop
+refreshes the thread without a restart. Undocumented, best-effort.
+
+Exit: 0 turn completed | 1 failed (thread/turn error, interrupted, app-server died) | 2 usage |
+      97 could not spawn/initialize the app-server (caller may fall back to `codex exec`) |
+      130/143 killed by signal.
+
+Config (environment, or KEY=VALUE lines in $RELAYBOT_HOME/config.env):
+  RELAYBOT_CODEX_BIN              codex binary (default: desktop-bundled codex, else `codex` on PATH)
+  RELAYBOT_MODEL                  model (default: unset = Codex's own default)
+  RELAYBOT_EFFORT                 reasoning effort (default: unset = Codex's own default)
+  RELAYBOT_SANDBOX                sandbox mode (default danger-full-access)
+  RELAYBOT_PROJECT_FALLBACK_ROOT  desktop project root used when no project matches workdir
+                                  (default RELAYBOT_DEFAULT_WORKDIR, else ~/Documents/relaybot)
+  RELAYBOT_CLIENT_NAME            app-server clientInfo name (default relaybot)
+  RELAYBOT_MAX_SECONDS            optional overall cap per turn (default none)
+"""
+import json, os, queue, shutil, signal, socket, struct, subprocess, sys, threading, time, uuid
+
+
+def load_config():
+    home = os.path.expanduser(os.environ.get("RELAYBOT_HOME", "~/.config/relaybot"))
+    try:
+        for line in open(os.path.join(home, "config.env"), encoding="utf-8"):
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k, v = k.strip(), v.strip().strip('"')
+            if k.startswith("RELAYBOT_") and not os.environ.get(k):
+                os.environ[k] = os.path.expanduser(v)
+    except OSError:
+        pass
+
+
+load_config()
+DESKTOP_CODEX = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"
+CODEX = os.environ.get("RELAYBOT_CODEX_BIN") or (
+    DESKTOP_CODEX if os.access(DESKTOP_CODEX, os.X_OK) else (shutil.which("codex") or "codex"))
+MODEL = os.environ.get("RELAYBOT_MODEL") or None
+EFFORT = os.environ.get("RELAYBOT_EFFORT") or None
+SANDBOX = os.environ.get("RELAYBOT_SANDBOX") or "danger-full-access"
+DEFAULT_ROOT = os.path.expanduser(os.environ.get("RELAYBOT_PROJECT_FALLBACK_ROOT")
+                                  or os.environ.get("RELAYBOT_DEFAULT_WORKDIR") or "~/Documents/relaybot")
+CLIENT = os.environ.get("RELAYBOT_CLIENT_NAME") or "relaybot"
+IPC_SOCK = os.path.expanduser("~/.codex/ipc/ipc.sock")
+NOTIFY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "codex-notify")
+EXIT_START_FAIL = 97
+
+
+def log(*a):
+    print(time.strftime("[%H:%M:%S]"), *a, flush=True)
+
+
+def clip(s, n):
+    s = (s or "").strip()
+    return s if len(s) <= n else s[:n] + f" …(+{len(s) - n} chars)"
+
+
+class StartError(Exception):
+    pass
+
+
+# ---------- desktop refresh over the Codex IPC socket ----------
+def ipc_refresh(thread_id):
+    """Ask the running Codex desktop to (re)load this thread into its sidebar."""
+    def send(s, o):
+        b = json.dumps(o, ensure_ascii=False).encode()
+        s.sendall(struct.pack("<I", len(b)) + b)
+
+    def recv(s):
+        h = b""
+        while len(h) < 4:
+            c = s.recv(4 - len(h))
+            if not c:
+                return None
+            h += c
+        n, d = struct.unpack("<I", h)[0], b""
+        while len(d) < n:
+            c = s.recv(n - len(d))
+            if not c:
+                return None
+            d += c
+        return json.loads(d)
+
+    try:
+        if not os.path.exists(IPC_SOCK):
+            return False
+        s = socket.socket(socket.AF_UNIX)
+        s.settimeout(3)
+        s.connect(IPC_SOCK)
+        rid = str(uuid.uuid4())
+        send(s, {"type": "request", "requestId": rid, "method": "initialize", "params": {"clientType": CLIENT}})
+        cid = None
+        for _ in range(20):
+            m = recv(s)
+            if m is None:
+                break
+            if m.get("type") == "response" and m.get("requestId") == rid:
+                cid = (m.get("result") or {}).get("clientId")
+                break
+        send(s, {"type": "broadcast", "method": "thread-unarchived", "sourceClientId": cid,
+                 "params": {"hostId": "local", "conversationId": thread_id}, "version": 1})
+        s.close()
+        return True
+    except Exception:
+        return False
+
+
+# ---------- app-server JSON-RPC over stdio ----------
+class AppServer:
+    def __init__(self, env=None):
+        try:
+            self.p = subprocess.Popen([CODEX, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE, text=True, bufsize=1, env=env)
+        except OSError as e:
+            raise StartError(f"cannot spawn {CODEX}: {e}")
+        self.q, self.n = queue.Queue(), 0
+        self.stderr_tail = []
+        threading.Thread(target=self._read, daemon=True).start()
+        threading.Thread(target=self._read_err, daemon=True).start()
+
+    def _read(self):
+        for line in self.p.stdout:
+            try:
+                self.q.put(json.loads(line))
+            except ValueError:
+                pass
+        self.q.put(None)  # EOF: server exited
+
+    def _read_err(self):
+        for line in self.p.stderr:
+            self.stderr_tail = (self.stderr_tail + [line.rstrip()])[-20:]
+
+    def send(self, o):
+        self.p.stdin.write(json.dumps(o, ensure_ascii=False) + "\n")
+        self.p.stdin.flush()
+
+    def request(self, method, params, on_other, timeout=180):
+        self.n += 1
+        rid = self.n
+        self.send({"id": rid, "method": method, "params": params})
+        end = time.time() + timeout
+        while time.time() < end:
+            try:
+                o = self.q.get(timeout=1)
+            except queue.Empty:
+                continue
+            if o is None:
+                raise RuntimeError(f"app-server exited during {method}: " + " | ".join(self.stderr_tail[-5:]))
+            if o.get("id") == rid and "method" not in o:
+                if "error" in o:
+                    raise RuntimeError(f"{method} error: {json.dumps(o['error'], ensure_ascii=False)[:500]}")
+                return o.get("result") or {}
+            on_other(o)
+        raise TimeoutError(method)
+
+    def close(self):
+        try:
+            if self.p.poll() is None:
+                self.p.stdin.close()
+                self.p.terminate()
+                try:
+                    self.p.wait(5)
+                except subprocess.TimeoutExpired:
+                    self.p.kill()
+        except Exception:
+            pass
+
+
+# ---------- helpers ----------
+def real(p):
+    try:
+        return os.path.realpath(os.path.expanduser(p))
+    except Exception:
+        return p
+
+
+def main_worktree_root(wd):
+    """Main worktree root when wd is the root of a linked git worktree, else None."""
+    try:
+        r = subprocess.run(["git", "-C", wd, "rev-parse", "--path-format=absolute",
+                            "--show-toplevel", "--git-dir", "--git-common-dir"],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    except OSError:
+        return None
+    lines = r.stdout.splitlines()
+    if r.returncode != 0 or len(lines) != 3:
+        return None
+    top, git_dir, common = (real(x) for x in lines)
+    if top != real(wd) or git_dir == common or os.path.basename(common) != ".git":
+        return None
+    return os.path.dirname(common)
+
+
+def pick_project(srv, workdir, on_other):
+    projects, cursor = [], None
+    for _ in range(50):
+        r = srv.request("project/list", {"cursor": cursor, "limit": 100}, on_other)
+        projects += r.get("data") or []
+        cursor = r.get("nextCursor")
+        if not cursor:
+            break
+    wd, folder = real(workdir), os.path.basename(real(workdir))
+
+    def matches(root):
+        return [p for p in projects if any(real(x.get("path", "")) == root for x in p.get("roots") or [])]
+
+    def rank(p, name=folder):
+        return (0 if len(p.get("roots") or []) == 1 else 1, 0 if p.get("name") == name else 1, -(p.get("updatedAt") or 0))
+
+    match = min(matches(wd), key=rank, default=None)
+    if match:
+        return match
+    main_root = main_worktree_root(wd)
+    if main_root:
+        main_folder = os.path.basename(main_root)
+        match = min(matches(main_root), key=lambda p: rank(p, main_folder), default=None)
+        if match:
+            return match
+    fallback = real(DEFAULT_ROOT)
+    default_workdir = real(os.environ.get("RELAYBOT_DEFAULT_WORKDIR") or "~/Documents/relaybot")
+    grok_root = real("~/Documents/codex-for-grok")
+    if wd not in (fallback, default_workdir, grok_root):
+        try:
+            top = subprocess.run(["git", "-C", wd, "rev-parse", "--show-toplevel"],
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            if top.returncode == 0 and real(top.stdout.rstrip("\n")) == wd:
+                root = main_root or wd
+                params = {"name": os.path.basename(root), "roots": [{"path": root}], "idempotencyKey": "relaybot:" + root}
+                project = srv.request("project/create", params, on_other)["project"]
+                if project.get("id"):
+                    return project
+                raise ValueError("project/create returned no project ID")
+        except (OSError, RuntimeError, KeyError, ValueError, TimeoutError) as e:
+            log("[codex-app-run] project creation failed, using fallback:", e)
+    if not (os.environ.get("RELAYBOT_PROJECT_FALLBACK_ROOT") or os.environ.get("RELAYBOT_DEFAULT_WORKDIR")):
+        defaults = matches(grok_root)
+        if defaults:
+            return min(defaults, key=rank)
+    return min(matches(fallback), key=rank, default=None)
+
+
+def thread_title(bot, run):
+    text = ""
+    for f in ("task.md", "prompt.md"):
+        try:
+            text = open(os.path.join(run, f), encoding="utf-8").read()
+            break
+        except OSError:
+            continue
+    first = next((l.strip().lstrip("#").strip() for l in text.splitlines() if l.strip()), "Codex task")
+    first = first if len(first) <= 60 else first[:59] + "…"
+    return f"[{bot}] {first}"
+
+
+def main():
+    if len(sys.argv) < 4:
+        print(__doc__, file=sys.stderr)
+        return 2
+    bot, workdir, run = sys.argv[1], sys.argv[2], sys.argv[3]
+    resume = len(sys.argv) > 4 and sys.argv[4] == "resume"
+    tid = None
+    if resume:
+        try:
+            tid = os.environ.get("RELAYBOT_RESUME_ID") or open(os.path.join(run, "session")).read().strip()
+        except OSError as e:
+            log("[codex-app-run] cannot read session ID:", e)
+            return 1
+        if not tid or tid.startswith("-") or any(c.isspace() for c in tid):
+            log("[codex-app-run] invalid session ID")
+            return 1
+    turn_dir = os.environ.get("RELAYBOT_TURN_DIR")
+    output = os.path.join(turn_dir, "reply.md") if turn_dir else os.path.join(run, "last.md")
+    max_s = float(os.environ.get("RELAYBOT_MAX_SECONDS") or 0)
+    prompt = open(os.path.join(run, "prompt.md"), encoding="utf-8").read()
+    os.makedirs(workdir, exist_ok=True)
+
+    state = {"tid": None, "turn": None, "done": None, "last": None, "last_ping": 0.0, "notified_auth": False}
+    srv = None
+
+    def cleanup_and_exit(signum, _frame):
+        log(f"[codex-app-run] received signal {signum}, stopping")
+        if srv and state["tid"] and state["turn"]:
+            try:
+                srv.send({"id": 999999, "method": "turn/interrupt", "params": {"threadId": state["tid"], "turnId": state["turn"]}})
+                time.sleep(1)
+            except Exception:
+                pass
+        if srv:
+            srv.close()
+        os._exit(128 + signum)
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, cleanup_and_exit)
+
+    def needs_auth(reason, params):
+        if (state["notified_auth"] or not state["tid"] or params.get("threadId") not in (None, state["tid"])
+                or (state["turn"] and params.get("turnId") not in (None, state["turn"]))):
+            return
+        try:
+            subprocess.run([NOTIFY, bot, "needs_auth", run, workdir,
+                            f"Codex needs user input: {reason}"], timeout=30, check=True)
+            state["notified_auth"] = True
+        except Exception as e:
+            log("[codex-app-run] codex-notify failed:", e)
+
+    def ping(force=False):
+        if state["tid"] and (force or time.time() - state["last_ping"] >= 15):
+            state["last_ping"] = time.time()
+            ipc_refresh(state["tid"])
+
+    def handle(o):
+        m, p = o.get("method"), o.get("params") or {}
+        if "id" in o and m:  # server -> client request
+            if m in ("item/commandExecution/requestApproval", "item/fileChange/requestApproval"):
+                srv.send({"id": o["id"], "result": {"decision": "decline"}})
+                log(f"[approval] declined {m}: {clip(json.dumps(p, ensure_ascii=False), 300)}")
+                needs_auth(clip(p.get("command") or p.get("reason") or m, 200), p)
+            elif m in ("execCommandApproval", "applyPatchApproval"):
+                srv.send({"id": o["id"], "result": {"decision": "denied"}})
+                log(f"[approval] declined {m}")
+                needs_auth(m, p)
+            else:
+                srv.send({"id": o["id"], "error": {"code": -32601, "message": "not supported by codex-app-run (headless)"}})
+                log(f"[server-request] refused {m}: {clip(json.dumps(p, ensure_ascii=False), 300)}")
+                if m in ("item/permissions/requestApproval", "item/tool/requestUserInput", "mcpServer/elicitation/request"):
+                    needs_auth(m, p)
+            return
+        if p.get("threadId") not in (None, state["tid"]):
+            return  # other threads (e.g. subagents) - ignore
+        if not state["turn"]:
+            return
+        event_turn = p.get("turnId") or (p.get("turn") or {}).get("id")
+        if event_turn and event_turn != state["turn"]:
+            return
+        if m == "item/completed":
+            it = p.get("item") or {}
+            t = it.get("type")
+            if t == "agentMessage":
+                text = it.get("text") or ""
+                if it.get("phase") in (None, "final_answer"):
+                    state["last"] = text
+                log("[agent]", clip(text, 4000))
+            elif t == "commandExecution":
+                log(f"[cmd] $ {clip(it.get('command'), 500)}  (exit {it.get('exitCode')}, {it.get('durationMs')}ms)")
+                if it.get("aggregatedOutput"):
+                    log("      " + clip(it["aggregatedOutput"], 1500).replace("\n", "\n      "))
+            elif t == "fileChange":
+                for c in it.get("changes") or []:
+                    log(f"[file] {c.get('kind', {}).get('type', c.get('kind')) if isinstance(c.get('kind'), dict) else c.get('kind')} {c.get('path')}")
+            elif t == "mcpToolCall":
+                log(f"[mcp] {it.get('server')}.{it.get('tool')} {it.get('status')}" + (f" error={it.get('error')}" if it.get("error") else ""))
+            elif t == "reasoning":
+                if it.get("summary"):
+                    log("[thinking]", clip(" ".join(it["summary"]), 600))
+            elif t == "webSearch":
+                log("[web]", clip(json.dumps({k: v for k, v in it.items() if k not in ("id", "type")}, ensure_ascii=False), 300))
+            elif t not in ("userMessage",):
+                log(f"[{t}]")
+            ping()
+        elif m == "hook/completed":
+            hr = p.get("run") or {}
+            out = "; ".join(clip(e.get("text"), 200) for e in hr.get("entries") or [])
+            log(f"[hook] {hr.get('eventName')} {hr.get('status')}" + (f" — {out}" if out else ""))
+        elif m == "turn/started":
+            log("[turn] started")
+        elif m == "turn/completed":
+            turn = p.get("turn") or {}
+            state["done"] = turn
+            log(f"[turn] {turn.get('status')}" + (f" error: {clip(json.dumps(turn.get('error'), ensure_ascii=False), 800)}" if turn.get("error") else ""))
+        elif m == "error":
+            log("[error]", clip(json.dumps(p, ensure_ascii=False), 800))
+
+    # ---- start: anything failing here means "no thread was created" -> 97 ----
+    try:
+        srv = AppServer(env={**os.environ, "RELAYBOT_RUN_DIR": run})
+        srv.request("initialize", {"clientInfo": {"name": CLIENT, "title": CLIENT, "version": "0.1.0"},
+                                   "capabilities": {"experimentalApi": True, "requestAttestation": False}}, handle, timeout=60)
+        srv.send({"method": "initialized"})
+        state["started"] = True
+        common = {"approvalPolicy": "never", "sandbox": SANDBOX}
+        if MODEL:
+            common["model"] = MODEL
+        if EFFORT:
+            common["config"] = {"model_reasoning_effort": EFFORT}
+        if resume:
+            th = srv.request("thread/resume", {"threadId": tid, **common}, handle)["thread"]
+            if th.get("id") != tid:
+                raise StartError("thread/resume returned a different thread ID")
+            print(f"session id: {tid}", flush=True)
+            log(f"[codex-app-run] resumed thread, cwd={th.get('cwd')} project={th.get('projectId')}")
+        else:
+            proj = None
+            try:
+                proj = pick_project(srv, workdir, handle)
+            except Exception as e:
+                log("[codex-app-run] project lookup failed, continuing without project:", e)
+            params = {"cwd": real(workdir), "threadSource": "user", **common}
+            if proj:
+                params["projectId"] = proj["id"]
+            th = srv.request("thread/start", params, handle)["thread"]
+            tid = th["id"]
+            with open(os.path.join(run, "session"), "w") as f:
+                f.write(tid + "\n")
+            print(f"session id: {tid}", flush=True)
+            log(f"[codex-app-run] new thread cwd={real(workdir)} project={(proj or {}).get('name')} ({(proj or {}).get('id')})")
+            try:
+                srv.request("thread/name/set", {"threadId": tid, "name": thread_title(bot, run)}, handle, timeout=30)
+            except Exception as e:
+                log("[codex-app-run] could not set title:", e)
+        state["tid"] = tid
+        tparams = {"threadId": tid, "input": [{"type": "text", "text": prompt, "text_elements": []}]}
+        if EFFORT:
+            tparams["effort"] = EFFORT
+        # Notifications can arrive before the turn/start response identifies the turn.
+        early = []
+        def during_start(o):
+            if "id" in o and o.get("method"):
+                handle(o)
+            else:
+                early.append(o)
+        r = srv.request("turn/start", tparams, during_start)
+        state["turn"] = r["turn"]["id"]
+        for o in early:
+            handle(o)
+    except Exception as e:
+        log(f"[codex-app-run] start failed: {e}")
+        if srv:
+            srv.close()
+        if "active writer" in str(e):
+            log("[codex-app-run] this thread is open/being written by another Codex process (e.g. the desktop). "
+                "Finish or close it there, then resume again.")
+        # Only fall back to `codex exec` when the app-server itself could not start;
+        # once it is up, a thread/turn error would fail the same way under exec (or double-run).
+        return 1 if state.get("started") else EXIT_START_FAIL
+
+    log(f"[codex-app-run] model={MODEL} effort={EFFORT} turn={state['turn']}")
+    ping(force=True)
+
+    # ---- wait for the turn; no timeout unless RELAYBOT_MAX_SECONDS is set ----
+    started = time.time()
+    rc = 1
+    try:
+        while state["done"] is None:
+            if max_s and time.time() - started > max_s:
+                log(f"[codex-app-run] exceeded RELAYBOT_MAX_SECONDS={max_s:.0f}, interrupting")
+                try:
+                    srv.request("turn/interrupt", {"threadId": state["tid"], "turnId": state["turn"]}, handle, timeout=30)
+                except Exception:
+                    pass
+                break
+            try:
+                o = srv.q.get(timeout=5)
+            except queue.Empty:
+                continue
+            if o is None:
+                log("[codex-app-run] app-server exited unexpectedly: " + " | ".join(srv.stderr_tail[-5:]))
+                break
+            handle(o)
+        if state["done"] is not None and state["done"].get("status") == "completed":
+            rc = 0
+    finally:
+        if state["last"] is not None:
+            with open(output, "w", encoding="utf-8") as f:
+                f.write(state["last"])
+        ping(force=True)
+        srv.close()
+    log(f"[codex-app-run] exit {rc}")
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())

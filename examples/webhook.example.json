@@ -1,0 +1,5 @@
+{
+  "url": "https://example.invalid/webhooks/REPLACE_WITH_YOUR_ROUTINE_WEBHOOK",
+  "key": "REPLACE_WITH_YOUR_ROUTINE_KEY",
+  "bot": "Example Bot"
+}

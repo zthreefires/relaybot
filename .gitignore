@@ -1,0 +1,8 @@
+# Never commit local config or secrets
+config.env
+webhooks/
+*.local.json
+outbox.jsonl
+__pycache__/
+*.pyc
+.DS_Store

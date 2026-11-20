@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""codex-run's turn-status resolver and pause recorder. Not a Codex hook (relaybot passes no hooks).
+
+  codex-relay-hook --result <rc> <log_start>   resolve the turn, write run/status.json, print
+                                               "<status>\\n<message for the webhook>"
+  codex-relay-hook --request <event> <reason>  record the turn's first pause (pending.json);
+                                               called by codex-notify for needs_auth requests
+
+Status comes only from system signals, never from the reply text:
+  failed      Codex/runner exited nonzero, or the turn produced no final reply
+  needs_auth  a pause was recorded this turn (app-server approval / permission / user-input request)
+  done        the turn finished; the receiver reads the reply to see what Codex said
+Needs RELAYBOT_RUN_DIR and RELAYBOT_TURN_DIR (set by codex-run).
+"""
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import time
+
+PAUSES = ("needs_auth", "blocked")  # blocked: only from older sessions that still call codex-notify blocked
+
+
+def store(path, data, first=False):
+    temp = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False)
+    tmp = Path(temp.name)
+    try:
+        with temp:
+            json.dump(data, temp, ensure_ascii=False)
+        if first:
+            try:
+                os.link(tmp, path)  # first complete request wins
+            except FileExistsError:
+                pass
+        else:
+            os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def record(turn, status, reason, source):
+    return dict(pause=turn.name, status=status, reason=reason[:500], source=source,
+                turn_id=None, session_id=None, ts=int(time.time()))
+
+
+def pending(turn):
+    try:
+        data = json.loads((turn / "pending.json").read_text(encoding="utf-8"))
+        if data["pause"] == turn.name and data["status"] in PAUSES:
+            return data
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+
+
+def result(turn, rc, reply):
+    if rc:
+        return record(turn, "failed", f"Codex exited with code {rc}. See log.txt for details.", "exit")
+    paused = pending(turn)
+    if paused:
+        return paused
+    if not reply.strip():
+        return record(turn, "failed", "Codex returned no reply for this turn.", "reply")
+    return record(turn, "done", "Turn finished.", "turn")
+
+
+def main():
+    run_dir = os.environ.get("RELAYBOT_RUN_DIR")
+    turn_dir = os.environ.get("RELAYBOT_TURN_DIR")
+    if not run_dir or not turn_dir:
+        sys.exit("codex-relay-hook: RELAYBOT_RUN_DIR and RELAYBOT_TURN_DIR must be set (codex-run sets them)")
+    run, turn = Path(run_dir), Path(turn_dir)
+    if sys.argv[1:2] == ["--result"]:
+        rc, log_start = map(int, sys.argv[2:4])
+        try:
+            reply = (run / "last.md").read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            reply = ""
+        data = result(turn, rc, reply)
+        store(run / "status.json", data)
+        print(data["status"])
+        if data["status"] != "done":
+            print(data["reason"])
+        if rc:
+            with (run / "log.txt").open("rb") as f:
+                f.seek(max(log_start, f.seek(0, os.SEEK_END) - 500))
+                print(f.read().decode("utf-8", errors="replace").strip())
+        elif reply.strip():
+            print(reply.strip()[:1500])
+        return
+    if sys.argv[1:2] == ["--request"] and len(sys.argv) == 4 and sys.argv[2] in PAUSES:
+        store(turn / "pending.json", record(turn, sys.argv[2], sys.argv[3], "request"), first=True)
+        return
+    sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main()
