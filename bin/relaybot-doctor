@@ -14,23 +14,32 @@ fail() { echo "FAIL  $*"; bad=$((bad+1)); }
 PY=${RELAYBOT_PYTHON:-$(command -v python3 || true)}
 if [ -n "$PY" ] && [ -x "$PY" ]; then pass "python3: $PY"; else fail "python3 not found (set RELAYBOT_PYTHON)"; fi
 
-for s in codex-run codex-app-run codex-notify codex-relay-hook; do
+for s in claude-run claude-stream-run codex-run codex-app-run codex-notify codex-relay-hook; do
   if [ -x "$here/$s" ]; then pass "script: $here/$s"; else fail "missing or not executable: $here/$s"; fi
 done
 bash -n "$here/codex-run" 2>/dev/null && pass "codex-run parses" || fail "codex-run has a syntax error"
-for s in codex-app-run codex-notify codex-relay-hook; do
+for s in claude-stream-run codex-app-run codex-notify codex-relay-hook; do
   "$PY" -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$here/$s" 2>/dev/null && pass "$s parses" || fail "$s has a syntax error"
 done
 
 if [ -f "$RELAYBOT_HOME/config.env" ]; then pass "config: $RELAYBOT_HOME/config.env"; else note "no $RELAYBOT_HOME/config.env (defaults apply; see config.example.env)"; fi
+
+claude_bin=$("$here/claude-run" --print-claude-bin 2>/dev/null)
+if [ -x "$claude_bin" ]; then
+  pass "claude: $claude_bin"
+else
+  note "Claude Code unavailable (set RELAYBOT_CLAUDE_BIN to enable /claude)"
+fi
 
 codex_bin=$("$here/codex-run" --print-codex-bin 2>/dev/null)
 if [ -n "$codex_bin" ] && [ -x "$codex_bin" ]; then
   pass "codex: $codex_bin ($("$codex_bin" --version 2>/dev/null | head -1))"
   "$codex_bin" app-server --help >/dev/null 2>&1 && pass "codex app-server available" \
     || note "codex app-server not available: runs will use the exec fallback (not visible in the desktop)"
+elif [ -x "$claude_bin" ]; then
+  note "Codex unavailable (Claude Code available)"
 else
-  fail "codex binary not found (set RELAYBOT_CODEX_BIN)"
+  fail "no coding CLI found (set RELAYBOT_CODEX_BIN or RELAYBOT_CLAUDE_BIN)"
 fi
 
 [ -S "$HOME/.codex/ipc/ipc.sock" ] && pass "desktop IPC socket present (live sidebar refresh)" \

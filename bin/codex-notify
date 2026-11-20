@@ -71,8 +71,9 @@ def main():
     extra = {}
     if event != "test":
         sid = read(run / "session").strip() or None
-        if sid and "codex resume" not in msg:
-            msg = f"View session: codex resume {sid}\n" + msg
+        resume = "claude --resume" if run.name.startswith("claude-run-") else "codex resume"
+        if sid and resume not in msg:
+            msg = f"View session: {resume} {sid}\n" + msg
         reply = read(run / "last.md")
         code = read(run / "exit").strip()
         extra = dict(session_id=sid, exit_code=int(code) if code.lstrip("-").isdigit() else None,

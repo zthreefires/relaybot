@@ -10,7 +10,7 @@ prefix=${PREFIX:-$HOME/bin}
 home=${RELAYBOT_HOME:-$HOME/.config/relaybot}
 
 mkdir -p "$prefix"
-for s in codex-run codex-app-run codex-notify codex-relay-hook relaybot-doctor; do
+for s in claude-run claude-stream-run codex-run codex-app-run codex-notify codex-relay-hook relaybot-doctor; do
   install -m 755 "$src/bin/$s" "$prefix/$s"
 done
 mkdir -p "$home/webhooks"; chmod 700 "$home" "$home/webhooks"

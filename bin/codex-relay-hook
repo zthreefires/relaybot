@@ -54,13 +54,14 @@ def pending(turn):
 
 
 def result(turn, rc, reply):
+    agent = "Claude Code" if turn.parent.name.startswith("claude-run-") else "Codex"
     if rc:
-        return record(turn, "failed", f"Codex exited with code {rc}. See log.txt for details.", "exit")
+        return record(turn, "failed", f"{agent} exited with code {rc}. See log.txt for details.", "exit")
     paused = pending(turn)
     if paused:
         return paused
     if not reply.strip():
-        return record(turn, "failed", "Codex returned no reply for this turn.", "reply")
+        return record(turn, "failed", f"{agent} returned no reply for this turn.", "reply")
     return record(turn, "done", "Turn finished.", "turn")
 
 

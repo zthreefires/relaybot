@@ -1,7 +1,7 @@
 # Install relaybot (for agents)
 
 You are an agent asked to install relaybot for your user. Follow these steps in order and report the
-result in the user's language. Run commands on the computer where Codex runs (for a personal agent with
+result in the user's language. Run commands on the computer where the selected CLI runs (for a personal agent with
 remote machines, that is the user's computer, not your own sandbox). Do not print secrets at any step.
 
 ## 0. Preconditions (check, don't fix silently)
@@ -9,10 +9,13 @@ remote machines, that is the user's computer, not your own sandbox). Do not prin
 ```bash
 command -v python3 && python3 --version          # need 3.8+
 command -v git
+# For Codex
 ls /Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex 2>/dev/null || command -v codex
+# For Claude Code
+command -v claude || test -x ~/.local/bin/claude
 ```
 
-If no Codex binary is found, stop and tell the user to install the Codex desktop app or CLI and sign in.
+Check only the targets the user intends to run. If a selected CLI is missing or needs sign-in, ask the user.
 
 ## 1. Get the code and install
 
@@ -27,16 +30,16 @@ git clone https://github.com/zthreefires/relaybot.git ~/relaybot 2>/dev/null || 
 
 Ask the user for the values they care about and set them in `~/.config/relaybot/config.env`:
 
+- `RELAYBOT_CLAUDE_BIN`: optional explicit path to Claude Code.
 - `RELAYBOT_MODEL`, `RELAYBOT_EFFORT`: leave unset to use their Codex defaults.
 - `RELAYBOT_REPOS_ROOT`: where their clones live (`<root>/<repo>`). Verify with `ls`.
-- `RELAYBOT_DEFAULT_WORKDIR`: folder for tasks tied to no project; ask them to create a Codex desktop
-  project with this root.
+- `RELAYBOT_DEFAULT_WORKDIR`: folder for tasks tied to no project; for Codex desktop filing, ask them to create a project with this root.
 
 ## 3. Verify
 
 ```bash
 ~/bin/relaybot-doctor            # expect "0 fail"
-~/relaybot/tests/selftest.sh     # offline: stub Codex + local webhook; expect "selftest passed"
+~/relaybot/tests/selftest.sh     # offline: stub Codex and Claude + local webhook; expect "selftest passed"
 ```
 
 ## 4. Install the skills and wire the bot

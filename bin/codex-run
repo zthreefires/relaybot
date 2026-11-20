@@ -1,21 +1,15 @@
 #!/usr/bin/env bash
-# codex-run <bot> <workdir|-> <task_file> [resume]
-# codex-run --print-codex-bin      (print the codex binary that would be used)
-#
-# Runs one Codex task (or continues one with `resume`) in <workdir>, then posts exactly one
-# event (done / needs_auth / failed) to the webhook configured for <bot>. The prompt Codex sees
-# is the task file verbatim: relaybot adds no instructions and passes no hooks. The event comes
-# from system signals only; the receiver reads the final reply (last.md) for what Codex said.
-# Preferred path: codex-app-run (Codex app-server, so the thread shows in the Codex desktop).
-# Fallback when the app-server can't start (exit 97): plain `codex exec` (not visible in desktop).
-#
-# Configuration: environment variables, or KEY=VALUE lines in $RELAYBOT_HOME/config.env
-# (default ~/.config/relaybot/config.env). See config.example.env.
+# Shared launcher for codex-run and claude-run. The invoked name selects the agent.
+# Usage: <agent>-run <bot> <workdir|-> <task_file> [resume]
+# The snapshot, lock, pause, reply and webhook all belong to one launch.
 set -u
 
-print_flag=""; case ${1:-} in --print-codex-bin) print_flag=$1 ;; esac
-if [ -z "$print_flag" ] && [ $# -lt 3 ]; then
-  sed -n '2,13p' "$0" >&2
+agent=codex
+if [ "${0##*/}" = claude-run ]; then agent=claude; fi
+runner="$agent-run"
+print_flag="--print-$agent-bin"
+if [ "${1:-}" != "$print_flag" ] && [ $# -lt 3 ]; then
+  echo "usage: $runner <bot> <workdir|-> <task_file> [resume]" >&2
   exit 2
 fi
 bot=${1:-}; workdir=${2:-}; task=${3:-}; mode=${4:-}
@@ -37,35 +31,34 @@ here=$(cd "$(dirname "$0")" && pwd)
 [ -n "${RELAYBOT_EXTRA_PATH:-}" ] && PATH="$RELAYBOT_EXTRA_PATH:$PATH"
 PATH="$here:$PATH"; export PATH
 
-# Codex binary: explicit setting, else the one bundled with the desktop app (versions match),
-# else whatever `codex` is on PATH.
-DESKTOP_CODEX=/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex
-if [ -z "${RELAYBOT_CODEX_BIN:-}" ]; then
-  if [ -x "$DESKTOP_CODEX" ]; then RELAYBOT_CODEX_BIN=$DESKTOP_CODEX; else RELAYBOT_CODEX_BIN=$(command -v codex || echo codex); fi
+if [ "$agent" = claude ]; then
+  binary=${RELAYBOT_CLAUDE_BIN:-$(command -v claude || echo "$HOME/.local/bin/claude")}
+else
+  desktop_codex=/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex
+  if [ -z "${RELAYBOT_CODEX_BIN:-}" ]; then
+    if [ -x "$desktop_codex" ]; then RELAYBOT_CODEX_BIN=$desktop_codex; else RELAYBOT_CODEX_BIN=$(command -v codex || echo codex); fi
+  fi
+  export RELAYBOT_CODEX_BIN
+  binary=$RELAYBOT_CODEX_BIN
 fi
-export RELAYBOT_CODEX_BIN
-CODEX=$RELAYBOT_CODEX_BIN
+if [ "${1:-}" = "$print_flag" ]; then echo "$binary"; exit 0; fi
 PY=${RELAYBOT_PYTHON:-$(command -v python3 || echo /usr/bin/python3)}
 RUN_ROOT=${RELAYBOT_RUN_ROOT:-/tmp}
-if [ "$print_flag" = --print-codex-bin ]; then echo "$CODEX"; exit 0; fi
-
-model_args=(); [ -n "${RELAYBOT_MODEL:-}" ] && model_args=(-m "$RELAYBOT_MODEL")
-effort_args=(); [ -n "${RELAYBOT_EFFORT:-}" ] && effort_args=(-c "model_reasoning_effort=\"$RELAYBOT_EFFORT\"")
 
 # "-" (or empty) means the default workdir for tasks tied to no existing project.
 if [ -z "$workdir" ] || [ "$workdir" = - ]; then workdir=${RELAYBOT_DEFAULT_WORKDIR:-$HOME/Documents/relaybot}; fi
-die() { echo "codex-run: $*" >&2; exit 1; }
+die() { echo "$runner: $*" >&2; exit 1; }
 [ -f "$task" ] && [ -r "$task" ] || die "cannot read task file: $task"
 mkdir -p "$workdir" || die "cannot open workdir: $workdir"
 
 sid=""
 if [ "$mode" = resume ]; then
   run=$(cd "$(dirname "$task")" && pwd) || die "cannot open run directory"
-  [[ ${run##*/} = codex-run-?* && -O $run && ! -L $run && -f $run/task.md && -f $run/prompt.md && -f $run/pause ]] ||
+  [[ ${run##*/} = "$runner"-?* && -O $run && ! -L $run && -f $run/task.md && -f $run/prompt.md && -f $run/pause ]] ||
     die "not an owned relaybot run directory: $run"
 else
   mkdir -p "$RUN_ROOT" || die "cannot create run root"
-  run=$(mktemp -d "$RUN_ROOT/codex-run-XXXXXXXX") || die "cannot create private run directory"
+  run=$(mktemp -d "$RUN_ROOT/$runner-XXXXXXXX") || die "cannot create private run directory"
   run=$(cd "$run" && pwd) || die "cannot open run directory"
 fi
 # flock the open directory description inherited from bash. The kernel releases
@@ -76,6 +69,10 @@ exec 9< "$run" || die "cannot open run directory"
 if [ "$mode" = resume ]; then
   sid=$(cat "$run/session") || die "cannot read session ID: $run/session"
   [[ -n $sid && $sid != -* && $sid != *[[:space:]]* ]] || die "invalid session ID in $run/session"
+  if [ "$agent" = claude ]; then
+    uuid='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    [[ $sid =~ $uuid ]] || die "invalid Claude session UUID in $run/session"
+  fi
   export RELAYBOT_RESUME_ID=$sid
 fi
 turn=$(mktemp -d "$run/turn-XXXXXXXX") || die "cannot create private turn directory"
@@ -104,19 +101,24 @@ rm -f "$run/status.json" "$run/exit" || die "cannot clear previous result"
 : >> "$run/log.txt" || die "cannot open run log"
 log_start=$(wc -c < "$run/log.txt") || die "cannot read log size"
 rc=97
-if [ -x "$here/codex-app-run" ] && [ -z "${RELAYBOT_FORCE_EXEC:-}" ]; then
+if [ "$agent" = claude ]; then
+  "$PY" "$here/claude-stream-run" "$binary" "$workdir" "$sid" >> "$run/log.txt" 2>&1
+  rc=$?
+elif [ -x "$here/codex-app-run" ] && [ -z "${RELAYBOT_FORCE_EXEC:-}" ]; then
   "$here/codex-app-run" "$bot" "$workdir" "$run" "$mode" >> "$run/log.txt" 2>&1
   rc=$?
 fi
-if [ $rc -eq 97 ]; then
+if [ "$agent" = codex ] && [ $rc -eq 97 ]; then
   echo "[codex-run] app-server path unavailable, falling back to codex exec" >> "$run/log.txt"
+  model_args=(); [ -n "${RELAYBOT_MODEL:-}" ] && model_args=(-m "$RELAYBOT_MODEL")
+  effort_args=(); [ -n "${RELAYBOT_EFFORT:-}" ] && effort_args=(-c "model_reasoning_effort=\"$RELAYBOT_EFFORT\"")
   opts=(${model_args[@]+"${model_args[@]}"} ${effort_args[@]+"${effort_args[@]}"} --skip-git-repo-check -o "$turn/reply.md" -)
   # Keep the live log and scope the session header to this invocation.
   offset=$(wc -c < "$run/log.txt") || die "cannot read log size"
   if [ "$mode" = resume ]; then
-    (cd "$workdir" && "$CODEX" exec resume "$sid" "${opts[@]}") < "$run/prompt.md" >> "$run/log.txt" 2>&1
+    (cd "$workdir" && "$binary" exec resume "$sid" "${opts[@]}") < "$run/prompt.md" >> "$run/log.txt" 2>&1
   else
-    "$CODEX" exec -C "$workdir" "${opts[@]}" < "$run/prompt.md" >> "$run/log.txt" 2>&1
+    "$binary" exec -C "$workdir" "${opts[@]}" < "$run/prompt.md" >> "$run/log.txt" 2>&1
   fi
   rc=$?
   header=$(tail -c "+$((offset+1))" "$run/log.txt" | awk '/^session id: / {print $3; exit}')

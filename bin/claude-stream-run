@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""Run one Claude Code print-mode turn. The shared launcher owns final notification."""
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import uuid
+
+
+def permission_reason(tool, args):
+    if tool == "AskUserQuestion" and args.get("questions"):
+        questions = []
+        for item in args.get("questions", []):
+            options = [opt["label"] for opt in item.get("options", []) if opt.get("label")]
+            questions.append(item["question"] + (" (" + ", ".join(options) + ")" if options else ""))
+        return "Claude Code needs user input: " + " ".join(questions)
+    detail = args.get("description") or args.get("file_path") or args.get("command")
+    return f"Claude Code needs permission for {tool}" + (f": {detail}" if detail else ".")
+
+
+def pause(reason):
+    helper = Path(__file__).with_name("codex-relay-hook")
+    subprocess.run([sys.executable, str(helper), "--request", "needs_auth", reason[:500]], check=True)
+    return 0
+
+
+def stop(proc):
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
+def finish(result, turn, rc, account_error):
+    if result is None:
+        print("Claude Code exited without a result frame.")
+        return rc or 1
+    reply = result.get("result")
+    if isinstance(reply, str) and reply:
+        (turn / "reply.md").write_bytes(reply.encode("utf-8"))
+    if result["is_error"]:
+        if result.get("startup_failure_reason") == "gateway_signin_required":
+            account_error = "gateway_signin_required"
+        if account_error or result.get("api_error_status") in (401, 402):
+            return pause("Claude Code needs account attention: " + str(account_error or result["api_error_status"]))
+    if rc or result["subtype"] != "success" or result["is_error"] is not False:
+        print("Claude Code result:", result["subtype"], "exit:", rc)
+        return rc or 1
+    denials = result.get("permission_denials") or []
+    if denials:
+        return pause(permission_reason(denials[0]["tool_name"], denials[0].get("tool_input", {})))
+    deferred = result.get("deferred_tool_use")
+    if deferred:
+        return pause(permission_reason(deferred["name"], deferred["input"]))
+    return 0
+
+
+def read_turn(proc, run, turn, sid):
+    # JSON framing preserves all UTF-8 task text, including CRLF and final whitespace.
+    prompt = (turn / "input.md").read_bytes().decode("utf-8")
+    user = dict(type="user", message=dict(role="user", content=prompt), parent_tool_use_id=None, session_id="")
+    proc.stdin.write(json.dumps(user).encode() + b"\n")
+    proc.stdin.flush()
+    result = None
+    account_error = None
+    for line in proc.stdout:
+        if result is not None:
+            # Drain shutdown output before wait() so a full pipe cannot block the CLI.
+            continue
+        frame = json.loads(line)
+        kind, subtype = frame["type"], frame.get("subtype")
+        if (kind, subtype) == ("system", "init") or kind == "result":
+            reported = frame["session_id"]
+            if not isinstance(reported, str) or str(uuid.UUID(reported)) != reported or (sid and sid != reported):
+                raise ValueError("unexpected Claude session ID")
+            if not sid:
+                sid = reported
+                (run / "session").write_text(sid + "\n")
+                print("session id:", sid, flush=True)
+
+        # End the child while the request is outstanding. It cannot run the tool
+        # or try an alternative after a denial. SIGTERM lets Claude flush its session.
+        if kind == "control_request":
+            request = frame["request"]
+            if request["subtype"] == "can_use_tool":
+                return pause(permission_reason(request["tool_name"], request["input"]))
+            if request["subtype"] == "elicitation":
+                return pause("Claude Code needs user input: " + request["message"])
+            if request["subtype"] == "request_user_dialog":
+                return pause("Claude Code needs user input: " + request["dialog_kind"])
+            raise ValueError("unsupported Claude control request")
+        if (kind, subtype) == ("system", "permission_denied"):
+            return pause(permission_reason(frame["tool_name"], {}) + " " + frame.get("message", ""))
+        if kind == "assistant" and frame.get("error") in ("authentication_failed", "billing_error",
+                                                          "oauth_org_not_allowed", "account_on_hold"):
+            account_error = frame["error"]
+        if kind == "result":
+            result = frame
+            proc.stdin.close()
+
+    proc.stdin.close()
+    rc = proc.wait()
+    rc = 128 - rc if rc < 0 else rc
+    return finish(result, turn, rc, account_error)
+
+
+def timeout(signum, frame):
+    raise TimeoutError("Claude Code exceeded RELAYBOT_MAX_SECONDS")
+
+
+def interrupted(signum, frame):
+    sys.exit(128 + signum)
+
+
+def main():
+    binary, cwd, sid = sys.argv[1:]
+    args = [binary, "-p", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json",
+            "--permission-prompt-tool", "stdio"]
+    if sid:
+        args.extend(["--resume", sid])
+    run, turn = (Path(os.environ[key]) for key in ("RELAYBOT_RUN_DIR", "RELAYBOT_TURN_DIR"))
+    limit = float(os.environ.get("RELAYBOT_MAX_SECONDS") or 0)
+    proc = subprocess.Popen(args, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    try:
+        signal.signal(signal.SIGTERM, interrupted)
+        signal.signal(signal.SIGALRM, timeout)
+        signal.setitimer(signal.ITIMER_REAL, limit)
+        return read_turn(proc, run, turn, sid)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        stop(proc)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as e:
+        print(f"claude-stream-run: {e}", file=sys.stderr)
+        sys.exit(1)

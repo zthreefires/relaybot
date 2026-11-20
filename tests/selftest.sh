@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# tests/selftest.sh: offline end-to-end check of codex-run -> codex-notify.
-# Usage: tests/selftest.sh [bin-directory]. Exercises exec, app-server and loopback webhooks.
-# All configuration, runs and tasks are temporary. No real Codex or external webhook is used.
+# tests/selftest.sh: offline end-to-end check of both runners and their shared webhook.
+# Usage: tests/selftest.sh [bin-directory]. Exercises Codex exec/app-server, Claude stream-json and loopback webhooks.
+# All configuration, runs and tasks are temporary. No real coding CLI or external webhook is used.
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
 bin=${1:-$repo/bin}

@@ -57,7 +57,8 @@ class Runs(unittest.TestCase):
         self.addCleanup(self.server.shutdown)
         self.endpoint(200)
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(('RELAYBOT_', 'GIT_'))}
-        self.env.update(HOME=str(self.root), RELAYBOT_CODEX_BIN=str(STUB), TRACE=str(self.trace),
+        self.env.update(HOME=str(self.root), RELAYBOT_CODEX_BIN=str(STUB), RELAYBOT_CLAUDE_BIN=str(STUB.with_name("fake-claude")),
+                        TRACE=str(self.trace),
                         WORK=str(self.work),
                         RELAYBOT_HOME=str(self.home), RELAYBOT_RUN_ROOT=str(self.root / 'runs'),
                         RELAYBOT_DEFAULT_WORKDIR=str(self.root / 'codex-for-grok'))
@@ -71,8 +72,9 @@ class Runs(unittest.TestCase):
 
     def launch(self, backend='exec', task=None, resume=False, work=None, **cfg):
         cfg.setdefault('reply', DONE)
-        env = dict(self.env, FIXTURE=json.dumps(cfg), RELAYBOT_FORCE_EXEC='1' if backend == 'exec' else '')
-        args = [str(BIN / 'codex-run'), 'test', str(work or self.work), str(task or self.task)]
+        env = dict(self.env, FIXTURE=json.dumps(cfg), RELAYBOT_FORCE_EXEC='' if backend == 'app' else '1')
+        runner = 'claude-run' if backend == 'claude' else 'codex-run'
+        args = [str(BIN / runner), 'test', str(work or self.work), str(task or self.task)]
         if resume:
             args.append('resume')
         return subprocess.Popen(args, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -130,6 +132,90 @@ class Runs(unittest.TestCase):
         self.assertIn('approve this', self.message)
         self.finish(self.launch(reply='x' * 9000), 'done')
         self.assertEqual((len(self.payload['reply']), self.payload['reply_truncated']), (8000, True))
+
+    def test_claude_pause_and_resume(self):
+        self.task.write_bytes("  --flag $HOME\r\n修复\r\n\n".encode())
+        for case, reason in [('permission', 'echo test'), ('question', 'Which format? (JSON, Text)')]:
+            run = self.finish(self.launch('claude', case=case), 'needs_auth')
+            self.assertTrue(run.name.startswith('claude-run-'))
+            self.assertEqual(run.stat().st_mode & 0o777, 0o700)
+            sid = self.payload['session_id']
+            self.assertIn('claude --resume ' + sid, self.message)
+            self.assertIn(reason, self.message)
+            self.assertEqual((self.payload['exit_code'], self.payload['reply'], self.payload['reply_file']),
+                             (0, '', None))
+            self.assertEqual((run / 'prompt.md').read_bytes(), self.task.read_bytes())
+            self.assertEqual(self.records()[-1], dict(cwd=str(self.work), resume=None,
+                                                      input=self.task.read_bytes().decode()))
+            follow = run / 'followup.md'
+            follow.write_text('  继续')
+            self.reject(self.launch(task=follow, resume=True))
+            reply = '好' * 8001
+            self.assertEqual(self.finish(self.launch('claude', task=follow, resume=True, reply=reply), 'done'), run)
+            self.assertEqual(self.records()[-1], dict(cwd=str(self.work), resume=sid, input='  继续'))
+            self.assertEqual(self.payload['session_id'], sid)
+            self.assertEqual(self.payload['reply'], reply[:8000])
+            self.assertTrue(self.payload['reply_truncated'])
+            self.assertEqual(Path(self.payload['reply_file']).read_text(), reply)
+            mismatch = 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb'
+            self.finish(self.launch('claude', task=follow, resume=True, result_sid=mismatch), 'failed', 1)
+            self.assertEqual((self.payload['session_id'], self.payload['reply_file']), (sid, None))
+            self.assertEqual(len((run / 'notified.jsonl').read_text().splitlines()), 3)
+            (run / 'session').write_text('latest')
+            self.reject(self.launch('claude', task=follow, resume=True))
+
+    def test_claude_results(self):
+        for cfg, status, rc in [
+            (dict(reply=AUTH), 'done', 0),  # a natural-language question is still a final reply
+            (dict(case='denied'), 'needs_auth', 0),
+            (dict(error='authentication_failed', is_error=True, rc=1), 'needs_auth', 0),
+            (dict(subtype='error_during_execution', is_error=True), 'failed', 1),
+            (dict(is_error=True), 'failed', 1),
+            (dict(reply=None), 'failed', 1),
+            (dict(case='eof'), 'failed', 1),
+            (dict(case='eof', rc=97), 'failed', 97),  # no Codex fallback
+            (dict(case='broken'), 'failed', 1),
+        ]:
+            with self.subTest(cfg=cfg):
+                self.finish(self.launch('claude', **cfg), status, rc)
+                self.assertEqual(self.payload['exit_code'], rc)
+                self.assertNotIn('codex resume', self.message)
+        self.env['RELAYBOT_MAX_SECONDS'] = '0.4'
+        self.finish(self.launch('claude', case='hang'), 'failed', 1)
+        self.assertIn('RELAYBOT_MAX_SECONDS', self.message)
+        self.env['RELAYBOT_CLAUDE_BIN'] = str(self.root / 'missing')
+        self.finish(self.launch('claude'), 'failed', 1)
+        self.assertIsNone(self.payload['session_id'])
+
+    def test_claude_discovery_and_delivery(self):
+        stub = self.env.pop('RELAYBOT_CLAUDE_BIN')
+        local = self.root / '.local/bin/claude'
+        local.parent.mkdir(parents=True)
+        local.symlink_to(stub)
+        # Test discovery with no system Claude on PATH. Pin the stub before launching.
+        import shutil
+        path = self.root / 'path'
+        path.mkdir()
+        for name in ('bash', 'dirname'):
+            (path / name).symlink_to(shutil.which(name))
+        argv = [BIN / 'claude-run', '--print-claude-bin']
+        found = subprocess.check_output(argv, env=dict(self.env, PATH=str(path)), text=True).strip()
+        self.assertEqual(found, str(local))
+        self.env['RELAYBOT_CLAUDE_BIN'] = found
+        self.env['RELAYBOT_MODEL'] = 'codex-only-test-model'
+        self.endpoint(307)
+        run = self.finish(self.launch('claude', work='-'), 'done', delivered=False)
+        self.assertEqual(self.transport_calls, [('POST', 307)])
+        self.assertEqual(self.records()[0]['cwd'], self.env['RELAYBOT_DEFAULT_WORKDIR'])
+        queued = json.loads((self.home / 'outbox.jsonl').read_text())
+        self.assertEqual(queued['run_id'], run.name)
+        self.assertEqual(queued['reply'], DONE)
+        self.assertEqual(len(self.records()), 1)
+        (self.home / 'config.env').write_text('RELAYBOT_CLAUDE_BIN=' + stub + '\n')
+        del self.env['RELAYBOT_CLAUDE_BIN']
+        self.assertEqual(subprocess.check_output(argv, env=self.env, text=True).strip(), stub)
+        self.env['RELAYBOT_CLAUDE_BIN'] = str(local)
+        self.assertEqual(subprocess.check_output(argv, env=self.env, text=True).strip(), str(local))
 
     def test_prompt_is_task_verbatim(self):
         for backend in ('exec', 'app'):

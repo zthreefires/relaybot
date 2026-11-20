@@ -1,8 +1,6 @@
 # Architecture
 
-relaybot is a few small scripts on the computer where Codex runs, two agent skills, and a
-webhook contract. The personal agent (Grok Bot) holds the context and writes the prompt;
-Codex does the work; the result comes back to the bot that dispatched it.
+Grok Bot holds the context and dispatches a task to the selected local runner. Both runners share the run-directory lifecycle and post one event through `codex-notify`. The diagram details the Codex path.
 
 ```
 chat ──> bot (skill: codex) ──Shell──> codex-run ──> codex-app-run ──stdio JSON-RPC──> codex app-server
@@ -18,22 +16,22 @@ chat ──> bot (skill: codex) ──Shell──> codex-run ──> codex-app-r
 
 ## Run directory
 
-A new task creates a private directory with `mktemp -d` under `RELAYBOT_RUN_ROOT` (default `/tmp`). Its name starts with `codex-run-` and its mode is `0700`. Resume reuses an owned run directory and takes an exclusive lock. Each launch snapshots its task before rotating results. A valid historical run is tightened to `0700` on resume. The worktree keeps the caller's umask.
+A new task creates a private directory with `mktemp -d` under `RELAYBOT_RUN_ROOT` (default `/tmp`). Its name starts with `codex-run-` or `claude-run-` and its mode is `0700`. Resume reuses an owned run directory and takes an exclusive lock. Each launch snapshots its task before rotating results. A valid historical run is tightened to `0700` on resume. The worktree keeps the caller's umask.
 
 | file | written by | meaning |
 |---|---|---|
-| `task.md` | codex-run | the task as dispatched (first line becomes the thread title) |
-| `prompt.md` | codex-run | exactly what Codex receives: the task, verbatim |
-| `log.txt` | codex-app-run / exec | readable log; contains `session id: <thread id>` |
-| `session` | codex-app-run / codex-run | Codex thread id, used for `resume` |
-| `turn-*/input.md` | codex-run | input snapshot for this launch |
-| `turn-*/previous-last.md` | codex-run | previous published reply, moved aside on resume |
-| `last.md` | codex-run | current reply, published by atomic rename from the turn directory |
-| `status.json` | codex-run at finalization | `{status, reason, pause, turn_id, session_id, source, ts}`; `status` is `done`, `needs_auth` or `failed` |
-| `turn-*/pending.json` | codex-notify | first approval/user-input request of this launch |
-| `pause` | codex-run | id of this launch; notifications and status are scoped to it |
+| `task.md` | shared launcher | the task as dispatched (first line names the Codex desktop thread) |
+| `prompt.md` | shared launcher | the task text sent to the selected agent, verbatim |
+| `log.txt` | selected backend | readable log; contains `session id: <thread id>` |
+| `session` | selected backend | Codex thread id or Claude session UUID, used for `resume` |
+| `turn-*/input.md` | shared launcher | input snapshot for this launch |
+| `turn-*/previous-last.md` | shared launcher | previous published reply, moved aside on resume |
+| `last.md` | shared launcher | current reply, published by atomic rename from the turn directory |
+| `status.json` | shared status resolver | `{status, reason, pause, turn_id, session_id, source, ts}`; `status` is `done`, `needs_auth` or `failed` |
+| `turn-*/pending.json` | shared pause recorder | first approval/user-input request of this launch |
+| `pause` | shared launcher | id of this launch; notifications and status are scoped to it |
 | `notified.jsonl` | codex-notify | dedupe ledger |
-| `exit`, `pid` | codex-run | exit code and pid |
+| `exit`, `pid` | shared launcher | exit code and pid |
 | `followup.md` | the agent | text for a `resume` turn |
 
 ## app-server flow (preferred path)
@@ -60,6 +58,14 @@ once a thread exists, retrying under exec would fail the same way or run the tas
 Concurrency: while a run is writing a thread, the desktop cannot write to it ("active writer").
 If the user continues the thread in the desktop, a later `resume` may fail until they close it there.
 
+## Claude Code CLI
+
+`claude-run` selects the Claude backend by its executable name. It runs `claude -p` in the requested workdir with stream-json input/output and `--permission-prompt-tool stdio`. One user frame carries the UTF-8 task, preserving whitespace and line endings. The runner reads the session UUID from the CLI, saves it in `session`, and checks the UUID again on `--resume <uuid>`. The full reply comes from the terminal `result` frame. Codex model, effort, sandbox and desktop settings apply only to Codex.
+
+A tool approval, `AskUserQuestion`, or MCP elicitation delivered as a control request stops the CLI while the request is outstanding. Relaybot records the reason as `needs_auth`, grants no permission, and lets Claude flush its transcript on termination. Structured permission denials, deferred tool calls and explicit account/authentication errors can also produce `needs_auth`. If a stop precedes the final result, `reply` is empty and `reply_file` is null. An unsuccessful or missing result, unexpected session ID, timeout or unexpected exit produces `failed`. A question expressed only in the final text is delivered as a normal reply. See the [Claude Code approvals interface](https://code.claude.com/docs/en/agent-sdk/user-input) and [print-mode lifecycle](https://code.claude.com/docs/en/headless).
+
+A follow-up uses the same workdir and `claude --resume <uuid>`. The user's existing Claude permissions still apply. If an interactive approval is required again, the user can open that session locally to handle it. Relaybot supplies no hooks or permission overrides.
+
 ## Desktop live refresh (undocumented, best-effort)
 
 Without a nudge, the desktop only shows the new thread after a restart. codex-app-run connects to the
@@ -71,7 +77,7 @@ this after `turn/start`, at most every 15 s on item completion, and at the end.
 This is not a documented interface. It may change or stop working with any desktop update; failures are
 ignored and only cost the live refresh.
 
-## What Codex sees, and where the status comes from
+## Codex turn status
 
 `prompt.md` is the task file, byte for byte. relaybot appends no rules or markers and passes no
 hooks, so the thread in the desktop reads exactly like a task the user typed, and continuing it by
@@ -104,7 +110,7 @@ Older sessions that were started with the previous dispatcher rules may still ca
 
 ## Webhook events
 
-codex-run posts exactly one event per launch (a new task or a resume), after the turn ends or the
+Each runner posts exactly one event per launch (a new task or a resume), after the turn ends or the
 runner exits. Pauses recorded during the turn are held until then. `codex-notify` POSTs JSON to the URL
 in `$RELAYBOT_HOME/webhooks/<bot>.json`:
 
@@ -122,9 +128,9 @@ Headers: `Content-Type: application/json`, `Authorization: Bearer <key>`, `X-Aut
 | field | meaning |
 |---|---|
 | `event` | `done`, `needs_auth`, `failed`, `test` (`blocked` only from older sessions, see above) |
-| `run_id`, `run_dir`, `workdir`, `ts` | the run directory's name and path, Codex's cwd, send time (unix seconds) |
-| `message` | short human text, at most 2000 chars: `View session: codex resume <id>` line, then for `done` the reply start; for `needs_auth` the request (`Codex needs user input: ...`) and the reply start; for `failed` the reason and the current turn's log tail |
-| `session_id` | Codex thread id, or `null` if none was created |
+| `run_id`, `run_dir`, `workdir`, `ts` | the run directory's name and path, the agent's cwd, send time (unix seconds) |
+| `message` | short human text, at most 2000 chars: session command (`codex resume <id>` or `claude --resume <id>`), then for `done` the reply start; for `needs_auth` the request and any reply start; for `failed` the reason and the current turn's log tail |
+| `session_id` | Codex thread id or Claude session UUID, or `null` if none was created |
 | `exit_code` | the runner's exit code for this launch (`0` for `done`/`needs_auth`) |
 | `reply` | this turn's final agent message (`last.md`), first 8000 chars; `""` if there was none |
 | `reply_truncated` | `true` when `reply` was cut; read `reply_file` for the rest |
@@ -134,8 +140,8 @@ Headers: `Content-Type: application/json`, `Authorization: Bearer <key>`, `X-Aut
 
 | event | when it fires | what the receiver does |
 |---|---|---|
-| `done` | the turn completed with a final reply and no pause was recorded | read `reply`: report the result, relay Codex's question, or say what blocks it |
-| `needs_auth` | the app-server asked for approval, a permission or user input during the turn; the request was declined and the turn ended | tell the user what Codex wanted (`message`, `status.json` `reason`) and what Codex said after (`reply`); continue only after they agree |
+| `done` | the turn completed with a final reply and no pause was recorded | read `reply`: report the result, relay the agent's question, or say what blocks it |
+| `needs_auth` | Codex requested approval/input or Claude reported one of the pause signals above | tell the user what the agent requested (`message`, `status.json` `reason`) and any final reply (`reply`); continue only after they agree |
 | `failed` | nonzero exit (app-server error, interrupted, killed, exec failure, resume mismatch), or no final reply | report the reason and log tail |
 | `test` | `/codex-setup` or `relaybot-doctor --webhook-test` | confirm the webhook works |
 

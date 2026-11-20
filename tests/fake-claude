@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""Offline Claude stream-json peer. Reject any unrecognised launch flag."""
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+import time
+import uuid
+
+
+def emit(kind, **fields):
+    print(json.dumps(dict(type=kind, **fields)), flush=True)
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-p", action="store_true", required=True)
+parser.add_argument("--verbose", action="store_true", required=True)
+parser.add_argument("--input-format", choices=["stream-json"], required=True)
+parser.add_argument("--output-format", choices=["stream-json"], required=True)
+parser.add_argument("--permission-prompt-tool", choices=["stdio"], required=True)
+parser.add_argument("--resume", type=uuid.UUID)
+args = parser.parse_args()
+cfg = json.loads(os.environ["FIXTURE"])
+sid = cfg.get("sid") or str(args.resume or uuid.uuid4())
+user = json.loads(sys.stdin.buffer.readline())
+assert user["type"] == "user" and user["message"]["role"] == "user"
+with Path(os.environ["TRACE"]).open("a") as trace:
+    print(json.dumps(dict(input=user["message"]["content"], cwd=os.getcwd(),
+                          resume=str(args.resume) if args.resume else None)), file=trace)
+emit("system", subtype="init", session_id=sid)
+case = cfg.get("case")
+tool = dict(tool_name="Bash", input={"command": "echo test"})
+if case == "question":
+    tool = dict(tool_name="AskUserQuestion", input={"questions": [
+        {"question": "Which format?", "options": [{"label": "JSON"}, {"label": "Text"}]}]})
+if case in ("permission", "question"):
+    emit("control_request", request_id="ask1", request=dict(subtype="can_use_tool", **tool))
+    # The tool is waiting. The launcher must stop this process without granting it.
+    if sys.stdin.buffer.readline():
+        with Path(os.environ["TRACE"]).open("a") as trace:
+            print(json.dumps(dict(unexpected_control_response=True)), file=trace)
+        raise AssertionError("unexpected control response")
+    sys.exit(88)
+if case == "hang":
+    time.sleep(60)
+if case == "broken":
+    print("malformed")
+    sys.exit()
+if case == "eof":
+    sys.exit(cfg.get("rc", 0))
+emit("assistant", message={"content": [{"type": "text", "text": "intermediate"}]}, error=cfg.get("error"))
+denials = [{"tool_name": tool["tool_name"], "tool_input": tool["input"]}] if case == "denied" else []
+emit("result", subtype=cfg.get("subtype", "success"), session_id=cfg.get("result_sid", sid),
+     result=cfg.get("reply"), is_error=cfg.get("is_error", False), permission_denials=denials)
+sys.stdin.buffer.read()  # stream input should close at the result
+sys.exit(cfg.get("rc", 0))

@@ -2,7 +2,7 @@
 
 ## /codex-setup (once per bot)
 
-Send `/codex-setup` in the chat of the bot that should dispatch to Codex. It:
+Send `/codex-setup` in the chat of the bot that should dispatch to Codex or Claude Code. It:
 
 1. creates the bot's `codex-events` webhook routine, or refreshes its prompt if it exists;
 2. asks you for the routine's webhook URL and key (the key through a secret request), only when there is no
@@ -33,6 +33,14 @@ was needed. After you answer or agree, the bot resumes the same session with you
 nothing to the prompt Codex sees, so the thread reads like a task you typed and you can continue it in
 the desktop by hand.
 
+## /claude (each task)
+
+```text
+/claude summarize the changes in example-repo and list the tests that cover them
+```
+
+Use the same bot, webhook and workdir selection as for `/codex`. The bot starts `claude-run`. Claude Code runs in CLI print mode. An approval or structured question produces `needs_auth` and the bot relays the request. After you respond, it passes your text to a new turn in that session. If the tool still needs interactive approval, open `claude --resume <id>` in the original directory. A question in ordinary reply text can arrive as `done`. The bot reads it and waits for your answer.
+
 ## Running the scripts by hand
 
 ```bash
@@ -41,6 +49,9 @@ codex-run my-bot ~/path/to/repo /tmp/task.md          # new run
 codex-run my-bot - /tmp/task.md                         # default workdir
 echo "Done, continue" > /tmp/codex-run-.../followup.md
 codex-run my-bot ~/path/to/repo /tmp/codex-run-.../followup.md resume
+claude-run my-bot ~/path/to/repo /tmp/task.md
+echo "Use the first option" > /tmp/claude-run-.../followup.md
+claude-run my-bot ~/path/to/repo /tmp/claude-run-.../followup.md resume
 codex-notify my-bot test /tmp ~ "hello"                 # webhook test
 ```
 
