@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """codex-app-run <bot> <workdir> <run_dir> [resume]
 
-Runs one Codex turn through `codex app-server`, so the thread is an interactive
-(source=vscode) thread that shows up in the Codex desktop, filed under the matching
-project. Called by codex-run; prints a readable log to stdout (codex-run redirects it
+Runs one Codex turn through `codex app-server`, creating an interactive
+(source=vscode) thread with the matching app-server project ID when available.
+Desktop sidebar grouping also depends on the workdir and desktop membership.
+Called by codex-run; prints a readable log to stdout (codex-run redirects it
 to run/log.txt).
 
 Reads  run/prompt.md (turn input, sent verbatim), run/task.md (thread title), run/session (resume).
@@ -418,7 +419,8 @@ def main():
             with open(os.path.join(run, "session"), "w") as f:
                 f.write(tid + "\n")
             print(f"session id: {tid}", flush=True)
-            log(f"[codex-app-run] new thread cwd={real(workdir)} project={(proj or {}).get('name')} ({(proj or {}).get('id')})")
+            log(f"[codex-app-run] new thread cwd={real(workdir)} project={(proj or {}).get('name')} "
+                f"({(proj or {}).get('id')}) desktop=codex://threads/{tid}")
             try:
                 srv.request("thread/name/set", {"threadId": tid, "name": thread_title(bot, run)}, handle, timeout=30)
             except Exception as e:

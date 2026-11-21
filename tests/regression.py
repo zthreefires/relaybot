@@ -437,10 +437,11 @@ class Runs(unittest.TestCase):
             (linked, [default], 'created'),                          # none: create for the main root
         ]:
             self.trace.write_text('')
-            self.finish(self.launch('app', work=wd, projects=projects), 'done')
+            run = self.finish(self.launch('app', work=wd, projects=projects), 'done')
             requests = {r['method']: r['params'] for r in self.records() if 'method' in r}
             self.assertEqual(requests['thread/start'].get('projectId'), expected)
             self.assertEqual(real(requests['thread/start']['cwd']), str(wd))
+            self.assertIn('codex://threads/' + (run / 'session').read_text().strip(), (run / 'log.txt').read_text())
             if expected == 'created':
                 self.assertEqual(requests['project/create'], dict(name='repo', roots=[dict(path=str(main))],
                                                                  idempotencyKey='relaybot:' + str(main)))

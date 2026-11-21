@@ -43,8 +43,7 @@ interactive threads only, so exec runs never appear there. codex-app-run talks t
 1. `initialize` with `clientInfo` (`RELAYBOT_CLIENT_NAME`) and `capabilities.experimentalApi`, then `initialized`.
 2. Page through `project/list` to find a matching real root, preferring a single-root project. If the workdir is the root of a linked Git worktree (`--git-dir` differs from `--git-common-dir`) and no project has that exact root, resolve the main worktree root (the parent of the common `.git`) and match on it with the same ranking, using the main folder name. At an unmatched Git worktree root, call `project/create` with the folder name, its canonical root and the stable idempotency key `relaybot:<real path>`; for a linked worktree these are the main root's name and path, never the worktree's. The thread cwd stays the workdir. Skip creation for default and fallback directories. On creation failure, log the error and look up the fallback project. With no project match, omit `projectId`.
 3. `thread/start` with `{cwd, approvalPolicy: "never", sandbox, threadSource: "user", projectId?, model?, config.model_reasoning_effort?}`.
-   Passing `projectId` is what files the thread under the right desktop project.
-   For a continuation: `thread/resume` with the stored thread id.
+   The server persists `projectId` for project-filtered queries. For a continuation, use `thread/resume` with the stored thread ID.
 4. `thread/name/set` to `[<bot>] <first line of task>`.
 5. `turn/start` with the prompt (and `effort` if configured).
 6. Stream notifications: `item/completed` (an `agentMessage` item gives the latest reply),
@@ -57,6 +56,14 @@ once a thread exists, retrying under exec would fail the same way or run the tas
 
 Concurrency: while a run is writing a thread, the desktop cannot write to it ("active writer").
 If the user continues the thread in the desktop, a later `resume` may fail until they close it there.
+
+### Desktop project membership
+
+In desktop build `26.1117.41037`, the local project sidebar reads `thread-project-assignments` from desktop state. In the bundled webview, `Pv8s.GT` builds the project history filter from assigned thread IDs, root hints, project root paths and their prefixes. `XyS0.ap` groups local threads by explicit assignment or workspace path. For managed worktrees it can also match the Git origin or common directory. Codex creates these under `$CODEX_HOME/worktrees` by default and can save an explicit assignment when starting the conversation. [Codex worktrees](https://learn.chatgpt.com/docs/environments/git-worktrees)
+
+An isolated run with the same app-server project ID on three threads reproduced the local grouping. The desktop function included the main checkout and the managed-layout worktree. It included the sibling worktree after it received a desktop assignment for that thread. The app-server's `thread/list` project filter already returned the sibling.
+
+The bundled app-server (`0.171.0-alpha.13`) exposes `projectId` on `thread/start` and `thread/metadata/update`. Its schema has no desktop membership or worktree-parent field. Setting `runtimeWorkspaceRoots` changes execution roots. Using the main checkout as `cwd` and a separate worktree environment also loses the execution directory on a cold resume in this version. Relaybot keeps the actual worktree as the thread cwd and logs a desktop link. See [usage](USAGE.md#running-the-scripts-by-hand) for filing an existing thread.
 
 ## Claude Code CLI
 

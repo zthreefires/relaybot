@@ -19,13 +19,15 @@ The bot:
 1. picks the working dir: the folder you named, else the existing clone under `RELAYBOT_REPOS_ROOT`,
    else asks; tasks tied to no project go to the default workdir;
 2. writes the full prompt from what it knows and starts `codex-run` in the background;
-3. tells you it started. The thread is visible in the Codex desktop sidebar, under the matching project,
-   titled `[<bot>] <first line>`. Don't type into it while it runs.
+3. tells you it started. The Codex desktop thread is titled `[<bot>] <first line>`.
+   Wait for the run to finish before writing to it.
 
 When the turn ends, one event comes back and the bot reads Codex's final reply: it reports what Codex
 did, or relays the question Codex asked or what is blocking it, and includes `codex resume <id>`. If the
 app-server asked for an approval or your input during the turn (`needs_auth`), the bot tells you what
-was needed. After you answer or agree, the bot resumes the same session with your reply. relaybot adds
+was needed. The bot records the full `run_dir` and session ID in chat after each launch. Answers, review
+fixes, extra tests and later changes to the same task in the same workdir resume its session by default.
+An independent read-only review can use its own session and resume it for later review rounds. relaybot adds
 nothing to the prompt Codex sees, so the thread reads like a task you typed and you can continue it in
 the desktop by hand.
 
@@ -51,9 +53,11 @@ claude-run my-bot ~/path/to/repo /tmp/claude-run-.../followup.md resume
 codex-notify my-bot test /tmp ~ "hello"                 # webhook test
 ```
 
-At a Git worktree root the app-server reuses a matching project or creates one with the folder name. A linked worktree (`git worktree add`, or Codex's `~/.codex/worktrees/*/<repo>`) with no exact-root project uses the main repository's project, creating it for the main root (named after the main folder) if none exists; the thread's cwd stays the worktree. A worktree subdirectory or a non-Git folder uses the fallback project. Configure its root with `RELAYBOT_PROJECT_FALLBACK_ROOT`. A project creation error is logged in `log.txt` and the task continues.
+At a Git worktree root the app-server reuses a matching project or creates one with the folder name. A linked worktree with no exact-root project uses the main repository's project ID. The thread's cwd stays the worktree. A worktree subdirectory or a non-Git folder uses the fallback project. Configure its root with `RELAYBOT_PROJECT_FALLBACK_ROOT`. A project creation error is logged in `log.txt` and the task continues.
 
-Keep the full `run_dir` from the summary. Resume snapshots `followup.md` and requires the original ID in `session`. If the ID is missing, recover it from the original log before retrying. An unreadable input or busy run leaves the prior turn usable. During a valid resume, `last.md` can be absent until a fresh reply is published.
+If a sibling worktree's thread is missing from the desktop project, open `codex://threads/<session_id>` on the relaybot computer. To file that individual thread, use **Move to project** in the desktop and select the main repository. Check the proposed folders and the working directory before continuing there. The desktop can propose adding project folders or switching the thread to the main checkout.
+
+Resume snapshots `followup.md` and requires the original ID in `session`. If the ID is missing, recover it from the original log before retrying. Report any failure. If the desktop holds the thread, ask the user to close it and retry the same ID. A replacement session requires the user's approval. An unreadable input or busy run leaves the prior turn usable. During a valid resume, `last.md` can be absent until a fresh reply is published.
 
 The last output line is `run_dir=... exit=... session=... status=...`, with status `done`, `needs_auth` or `failed`. `done` and `needs_auth` return 0. A runner failure keeps its nonzero exit code; a clean exit with no final reply is `failed` with exit 1. The webhook event carries the same status plus the reply; see [the event contract](ARCHITECTURE.md#webhook-events).
 
