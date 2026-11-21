@@ -24,7 +24,7 @@ Requirements: macOS or Linux, `bash`, `python3` (3.8+), a signed-in CLI for each
 4. Check: `relaybot-doctor` (read-only). From a clone, `tests/selftest.sh` runs an offline end-to-end
    test with stub Codex exec/app-server, Claude CLI and a local webhook. Pass an installed prefix to test that copy, e.g. `tests/selftest.sh ~/bin`.
 
-5. Install the skills into your agent: `skills/codex/SKILL.md` and `skills/relaybot-setup/SKILL.md`. Then,
+5. Install `skills/codex/SKILL.md`, `skills/claude/SKILL.md`, and `skills/relaybot-setup/SKILL.md` into your agent. Then,
    in each bot that should dispatch to either target, send `/relaybot-setup` once. It checks installation and sign-in for both CLIs and tests their shared webhook. New bots get one `relaybot-events` routine. Setup reuses an existing `codex-events` routine as is. A missing or signed-out CLI can be added later by rerunning setup.
 
 ## Configuration

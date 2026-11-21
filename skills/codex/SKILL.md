@@ -17,6 +17,8 @@ Choose the agent the user named. Use the same runner and workdir for every turn 
 
 ## Dispatch
 
+Always launch Codex through `codex-run` and Claude Code through `claude-run` because invoking `codex exec` or `claude -p` directly skips the webhook callback.
+
 1. On the user's relaybot computer (use ListMachines if needed), locate the runner in the install prefix, normally `~/bin`. If the computer is offline or the selected CLI is unavailable, tell the user. Keep their choice of agent. Claude uses its own CLI settings. Codex model and effort come from relaybot's config.
 2. Use the folder the user named. For an existing project, check for its clone under `RELAYBOT_REPOS_ROOT` (default `~/Developer`). Ask if you cannot identify the clone. Pass `-` only for a task tied to no existing project. It selects `RELAYBOT_DEFAULT_WORKDIR` (default `~/Documents/relaybot`). Read these settings from `$RELAYBOT_HOME/config.env` (default `~/.config/relaybot/config.env`).
 3. Use this bot's webhook slug. Look up the `bot` field in `$RELAYBOT_HOME/webhooks/<slug>.json` without printing the key. If unwired, use a short kebab-case slug and mention `/relaybot-setup` once. Both runners use the same routine.

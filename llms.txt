@@ -16,6 +16,7 @@ The personal agent keeps the context and writes the full prompt; the user picks 
 ## Skills
 
 - [skills/codex/SKILL.md](skills/codex/SKILL.md): /codex or /claude, dispatch a task and handle events
+- [skills/claude/SKILL.md](skills/claude/SKILL.md) routes /claude to the codex skill's dispatch and resume instructions with `claude-run`.
 - [skills/relaybot-setup/SKILL.md](skills/relaybot-setup/SKILL.md) checks Codex and Claude Code independently and tests their shared webhook.
 
 ## Optional

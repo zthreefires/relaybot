@@ -101,7 +101,7 @@ Then:
 
 To test the installed copies instead of `bin/` in the clone, run `~/relaybot/tests/selftest.sh ~/bin`.
 
-3. Install [`skills/codex/SKILL.md`](skills/codex/SKILL.md) and [`skills/relaybot-setup/SKILL.md`](skills/relaybot-setup/SKILL.md) into this agent's skill store.
+3. Install [`skills/codex/SKILL.md`](skills/codex/SKILL.md), [`skills/claude/SKILL.md`](skills/claude/SKILL.md), and [`skills/relaybot-setup/SKILL.md`](skills/relaybot-setup/SKILL.md) into this agent's skill store.
 
 ## Wire a bot
 
