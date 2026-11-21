@@ -73,7 +73,9 @@ for line in sys.stdin:
     result, error = {}, None
     if method == 'initialize' and cfg.get('fallback'):
         sys.exit(1)
-    if method == 'project/list':
+    if method == 'initialize':
+        result = {'codexHome': os.environ['CODEX_HOME']}
+    elif method == 'project/list':
         result = {'data': cfg.get('projects', [])}
     elif method == 'project/create':
         if cfg.get('create_error'):
@@ -84,7 +86,10 @@ for line in sys.stdin:
         sid = p.get('threadId', sid)
         if sid == 'unknown':
             error = 'unknown thread'
-        result = {'thread': {'id': sid}}
+        if method == 'thread/start' and cfg.get('start_error'):
+            error = 'start rejected'
+        cwd = p.get('cwd', cfg.get('resume_cwd'))
+        result = {'cwd': cfg.get('effective_cwd', cwd), 'thread': {'id': sid, 'cwd': cwd, 'projectId': p.get('projectId')}}
     elif method == 'turn/start':
         result = {'turn': {'id': 'turn'}}
     print(json.dumps({'id': req['id'], 'error': {'message': error}} if error else

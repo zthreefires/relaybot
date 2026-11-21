@@ -19,7 +19,7 @@ Requirements: macOS or Linux, `bash`, `python3` (3.8+), a signed-in CLI for each
    binary paths. See [Configuration](#configuration).
 
 3. For Codex desktop runs, in the Codex desktop app, create a project whose root is your default workdir
-   (`RELAYBOT_DEFAULT_WORKDIR`, default `~/Documents/relaybot`). Unmatched non-repository workdirs can use this fallback. Git repository roots get their own project. A linked worktree without its own project uses the main repository's app-server project ID. A sibling worktree can still be missing from the desktop sidebar. A preexisting `~/Documents/codex-for-grok` project is preferred as fallback when both root settings are unset.
+   (`RELAYBOT_DEFAULT_WORKDIR`, default `~/Documents/relaybot`). Unmatched non-repository workdirs can use this fallback. Git repository roots get their own project. Isolated Codex tasks use the main repository's project and Codex's managed worktree directory. A preexisting `~/Documents/codex-for-grok` project is preferred as fallback when both root settings are unset. [Worktree usage](USAGE.md#isolated-codex-tasks)
 
 4. Check: `relaybot-doctor` (read-only). From a clone, `tests/selftest.sh` runs an offline end-to-end
    test with stub Codex exec/app-server, Claude CLI and a local webhook. Pass an installed prefix to test that copy, e.g. `tests/selftest.sh ~/bin`.
@@ -47,7 +47,7 @@ Environment variables win over `config.env`. All keys are optional.
 | `RELAYBOT_PYTHON` | `python3` on PATH | interpreter for the helper scripts |
 | `RELAYBOT_CLIENT_NAME` | `relaybot` | client name reported to Codex |
 | `RELAYBOT_MAX_SECONDS` | none | optional cap per turn |
-| `RELAYBOT_FORCE_EXEC` | empty | set to skip the app-server path (env only) |
+| `RELAYBOT_FORCE_EXEC` | empty | skip app-server for ordinary Codex runs (env only). Managed worktree runs require app-server and fail when this is set. |
 
 Webhook files: `~/.config/relaybot/webhooks/<slug>.json`, mode 600, shaped like
 [`examples/webhook.example.json`](../examples/webhook.example.json). `/relaybot-setup` writes them for you.

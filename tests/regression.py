@@ -58,7 +58,7 @@ class Runs(unittest.TestCase):
         self.endpoint(200)
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(('RELAYBOT_', 'GIT_'))}
         self.env.update(HOME=str(self.root), RELAYBOT_CODEX_BIN=str(STUB), RELAYBOT_CLAUDE_BIN=str(STUB.with_name("fake-claude")),
-                        TRACE=str(self.trace),
+                        CODEX_HOME=str(self.root / 'test codex home'), TRACE=str(self.trace),
                         WORK=str(self.work),
                         RELAYBOT_HOME=str(self.home), RELAYBOT_RUN_ROOT=str(self.root / 'runs'),
                         RELAYBOT_DEFAULT_WORKDIR=str(self.root / 'codex-for-grok'))
@@ -70,13 +70,15 @@ class Runs(unittest.TestCase):
     def records(self):
         return [json.loads(x) for x in self.trace.read_text().splitlines()]
 
-    def launch(self, backend='exec', task=None, resume=False, work=None, **cfg):
+    def launch(self, backend='exec', task=None, resume=False, work=None, branch=None, **cfg):
         cfg.setdefault('reply', DONE)
         env = dict(self.env, FIXTURE=json.dumps(cfg), RELAYBOT_FORCE_EXEC='' if backend == 'app' else '1')
         runner = 'claude-run' if backend == 'claude' else 'codex-run'
         args = [str(BIN / runner), 'test', str(work or self.work), str(task or self.task)]
         if resume:
             args.append('resume')
+        if branch is not None:
+            args.extend(['--worktree', branch])
         return subprocess.Popen(args, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     def finish(self, proc, status, rc=0, delivered=True):
@@ -447,6 +449,79 @@ class Runs(unittest.TestCase):
                                                                  idempotencyKey='relaybot:' + str(main)))
             else:
                 self.assertNotIn('project/create', requests)
+
+    def test_managed_worktree(self):
+        repo = self.root / 'example repo'
+        git = ['git', '-C', str(repo)]
+        subprocess.run(['git', 'init', '-q', '-b', 'main', str(repo)], check=True)
+        subprocess.run(git + ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid',
+                              'commit', '-q', '--allow-empty', '-m', 'init'], check=True)
+        subprocess.run(git + ['branch', 'existing'], check=True)
+        subprocess.run(git + ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid',
+                              'commit', '-q', '--allow-empty', '-m', 'second'], check=True)
+        self.env['RELAYBOT_DEFAULT_WORKDIR'] = str(repo)
+        for branch, base in [('existing', 'HEAD~1'), ('feature/new', 'HEAD')]:
+            self.trace.write_text('')
+            run = self.finish(self.launch('app', work=repo, branch=branch), 'done')
+            wt = Path((run / 'worktree').read_text().rstrip('\n'))
+            self.assertEqual(wt.parents[1], Path(self.env['CODEX_HOME']) / 'worktrees')
+            self.assertRegex(wt.parent.name, r'^[a-f0-9]{4}$')
+            self.assertEqual(wt.name, repo.name)
+            self.assertEqual(self.payload['workdir'], str(wt))
+            at = ['git', '-C', str(wt)]
+            self.assertEqual(subprocess.check_output(at + ['symbolic-ref', '--short', 'HEAD'], text=True).strip(), branch)
+            self.assertEqual(subprocess.check_output(at + ['rev-parse', 'HEAD']), subprocess.check_output(git + ['rev-parse', base]))
+            req = {r['method']: r['params'] for r in self.records() if 'method' in r}
+            self.assertEqual(req['thread/start']['cwd'], str(wt))
+            self.assertEqual(req['thread/start']['projectId'], 'created')
+            self.assertEqual(req['project/create']['roots'], [{'path': str(repo)}])
+            owner = Path(subprocess.check_output(at + ['rev-parse', '--path-format=absolute', '--git-path',
+                                                       'codex-thread.json'], text=True).strip())
+            sid = (run / 'session').read_text().strip()
+            self.assertEqual(json.loads(owner.read_text()), dict(version=1, ownerThreadId=sid))
+            follow = run / 'followup.md'
+            follow.write_text('continue exactly here')
+            for wd in (repo, wt):
+                self.trace.write_text('')
+                self.finish(self.launch('app', work=wd, task=follow, resume=True, resume_cwd=str(wt)), 'done')
+                self.assertEqual(self.payload['workdir'], str(wt))
+                self.assertEqual([r.get('turn') for r in self.records() if 'turn' in r], [sid])
+                self.assertFalse(any(r.get('method') == 'thread/start' for r in self.records()))
+
+        for wd, cfg in [(repo, {'effective_cwd': str(repo)}), (repo, {'fallback': True}), (self.work, {})]:
+            self.trace.write_text('')
+            self.finish(self.launch('app', work=wd, task=follow, resume=True, resume_cwd=str(wt), **cfg), 'failed', 1)
+            self.assertFalse(any('turn' in r or 'exec' in r.get('argv', []) for r in self.records()))
+        owner.write_text(json.dumps(dict(version=1, ownerThreadId='different')))
+        self.trace.write_text('')
+        self.finish(self.launch('app', work=repo, task=follow, resume=True, resume_cwd=str(wt)), 'failed', 1)
+        self.assertFalse(any(r.get('method') == 'thread/resume' for r in self.records()))
+        subprocess.run(git + ['worktree', 'remove', str(wt)], check=True)
+        self.finish(self.launch('app', work=wt, task=follow, resume=True, resume_cwd=str(wt)), 'failed', 1)
+        self.assertFalse(wt.exists())
+
+        root = wt.parents[1]
+        slots = set(root.iterdir())
+        for wd, branch, cfg in [(repo, 'main', {}), (repo, 'existing', {}), (repo, '-b', {}),
+                                (repo, 'blocked', {'create_error': True}), (self.work, 'new', {}),
+                                (self.root / 'missing', 'new', {})]:
+            self.trace.write_text('')
+            self.finish(self.launch('app', work=wd, branch=branch, **cfg), 'failed', 1)
+            self.assertFalse(any(r.get('method') == 'thread/start' or 'turn' in r for r in self.records()))
+            self.assertEqual(set(root.iterdir()), slots)
+        self.assertFalse((self.root / 'missing').exists())
+        self.reject(self.launch('claude', work=repo, branch='feature/claude'))
+        self.finish(self.launch('exec', work=repo, branch='feature/forced'), 'failed', 1)
+
+        rejected = self.finish(self.launch('app', work=repo, branch='retry', start_error=True), 'failed', 1)
+        self.assertFalse((rejected / 'worktree').exists())
+        self.assertEqual(set(root.iterdir()), slots)
+        # The rejected launch left a local branch. Competing retries can only check it out once.
+        retries = [self.launch('app', work=repo, branch='retry') for _ in range(4)]
+        for proc in retries:
+            proc.communicate(timeout=20)
+        self.assertEqual(sorted(p.returncode for p in retries), [0, 1, 1, 1])
+        self.assertEqual(len(set(root.iterdir()) - slots), 1)
 
     def test_transport(self):
         for code in (200, 301, 302, 303, 307, 308):

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Shared launcher for codex-run and claude-run. The invoked name selects the agent.
-# Usage: <agent>-run <bot> <workdir|-> <task_file> [resume]
+# Usage: <agent>-run <bot> <workdir|-> <task_file> [resume | --worktree <branch> (Codex)]
 # The snapshot, lock, pause, reply and webhook all belong to one launch.
 set -u
 
@@ -45,11 +45,19 @@ if [ $# -eq 1 ] && [ "$1" = "--login-status" ]; then
   if [ "$agent" = claude ]; then exec "$binary" auth status --json; fi
   exec "$binary" login status
 fi
-if [ $# -lt 3 ]; then
+mode=${4:-}
+usage() {
   echo "usage: $runner <bot> <workdir|-> <task_file> [resume]" >&2
+  if [ "$agent" = codex ]; then echo "       codex-run <bot> <main-repo> <task_file> --worktree <branch>" >&2; fi
   exit 2
-fi
-bot=$1; workdir=$2; task=$3; mode=${4:-}
+}
+case "$#:$mode" in
+  3:|4:|4:resume) ;;
+  5:--worktree) [ "$agent" = codex ] && [ -n "$2" ] && [ "$2" != - ] && [ -n "$5" ] || usage ;;
+  *) usage ;;
+esac
+bot=$1; workdir=$2; task=$3
+shift 3
 PY=${RELAYBOT_PYTHON:-$(command -v python3 || echo /usr/bin/python3)}
 RUN_ROOT=${RELAYBOT_RUN_ROOT:-/tmp}
 
@@ -57,14 +65,20 @@ RUN_ROOT=${RELAYBOT_RUN_ROOT:-/tmp}
 if [ -z "$workdir" ] || [ "$workdir" = - ]; then workdir=${RELAYBOT_DEFAULT_WORKDIR:-$HOME/Documents/relaybot}; fi
 die() { echo "$runner: $*" >&2; exit 1; }
 [ -f "$task" ] && [ -r "$task" ] || die "cannot read task file: $task"
-mkdir -p "$workdir" || die "cannot open workdir: $workdir"
 
 sid=""
 if [ "$mode" = resume ]; then
   run=$(cd "$(dirname "$task")" && pwd) || die "cannot open run directory"
   [[ ${run##*/} = "$runner"-?* && -O $run && ! -L $run && -f $run/task.md && -f $run/prompt.md && -f $run/pause ]] ||
     die "not an owned relaybot run directory: $run"
+fi
+managed=
+if [ "$mode" = --worktree ] || { [ "$agent" = codex ] && [ "$mode" = resume ] && [ -f "$run/worktree" ]; }; then
+  managed=1
 else
+  mkdir -p "$workdir" || die "cannot open workdir: $workdir"
+fi
+if [ "$mode" != resume ]; then
   mkdir -p "$RUN_ROOT" || die "cannot create run root"
   run=$(mktemp -d "$RUN_ROOT/$runner-XXXXXXXX") || die "cannot create private run directory"
   run=$(cd "$run" && pwd) || die "cannot open run directory"
@@ -113,10 +127,13 @@ if [ "$agent" = claude ]; then
   "$PY" "$here/claude-stream-run" "$binary" "$workdir" "$sid" >> "$run/log.txt" 2>&1
   rc=$?
 elif [ -x "$here/codex-app-run" ] && [ -z "${RELAYBOT_FORCE_EXEC:-}" ]; then
-  "$here/codex-app-run" "$bot" "$workdir" "$run" "$mode" >> "$run/log.txt" 2>&1
+  "$here/codex-app-run" "$bot" "$workdir" "$run" "$@" >> "$run/log.txt" 2>&1
   rc=$?
 fi
-if [ "$agent" = codex ] && [ $rc -eq 97 ]; then
+if [ "$managed" ] && [ $rc -eq 97 ]; then
+  echo "[codex-run] managed worktree runs require the Codex app-server" >> "$run/log.txt"
+  rc=1
+elif [ "$agent" = codex ] && [ $rc -eq 97 ]; then
   echo "[codex-run] app-server path unavailable, falling back to codex exec" >> "$run/log.txt"
   model_args=(); [ -n "${RELAYBOT_MODEL:-}" ] && model_args=(-m "$RELAYBOT_MODEL")
   effort_args=(); [ -n "${RELAYBOT_EFFORT:-}" ] && effort_args=(-c "model_reasoning_effort=\"$RELAYBOT_EFFORT\"")
@@ -146,6 +163,7 @@ st=${result%%$'\n'*}
 why=${result#*$'\n'}
 if [ "$st" = failed ] && [ "$rc" = 0 ]; then rc=1; fi
 echo "$rc" > "$run/exit" || die "cannot save exit code"
+if [ "$managed" ] && [ -s "$run/worktree" ]; then workdir=$(cat "$run/worktree"); fi
 "$here/codex-notify" --final "$bot" "$st" "$run" "$workdir" "$why"
 echo "run_dir=$run exit=$rc session=$sid status=$st"
 exit "$rc"

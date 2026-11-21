@@ -24,6 +24,7 @@ A new task creates a private directory with `mktemp -d` under `RELAYBOT_RUN_ROOT
 | `prompt.md` | shared launcher | the task text sent to the selected agent, verbatim |
 | `log.txt` | selected backend | readable log; contains `session id: <thread id>` |
 | `session` | selected backend | Codex thread id or Claude session UUID, used for `resume` |
+| `worktree` | codex-app-run | absolute checkout path for a run opened with `--worktree <branch>`, also used as the webhook workdir |
 | `turn-*/input.md` | shared launcher | input snapshot for this launch |
 | `turn-*/previous-last.md` | shared launcher | previous published reply, moved aside on resume |
 | `last.md` | shared launcher | current reply, published by atomic rename from the turn directory |
@@ -51,8 +52,8 @@ interactive threads only, so exec runs never appear there. codex-app-run talks t
    requests from the server are declined (runs are unattended) and recorded for the final `needs_auth` decision.
 
 Exit codes: `0` turn completed, `1` failed after the server was up, `2` usage, `97` the app-server
-could not be spawned or initialized, `130/143` killed. Only `97` makes codex-run fall back to `codex exec`:
-once a thread exists, retrying under exec would fail the same way or run the task twice.
+could not be spawned or initialized, `130/143` killed. Ordinary runs fall back to `codex exec` on `97`.
+A managed worktree needs the interactive thread and main project, so an unavailable app-server produces a failed event for both the initial launch and a resume.
 
 Concurrency: while a run is writing a thread, the desktop cannot write to it ("active writer").
 If the user continues the thread in the desktop, a later `resume` may fail until they close it there.
@@ -64,6 +65,20 @@ In desktop build `26.1117.41037`, the local project sidebar reads `thread-projec
 An isolated run with the same app-server project ID on three threads reproduced the local grouping. The desktop function included the main checkout and the managed-layout worktree. It included the sibling worktree after it received a desktop assignment for that thread. The app-server's `thread/list` project filter already returned the sibling.
 
 The bundled app-server (`0.171.0-alpha.13`) exposes `projectId` on `thread/start` and `thread/metadata/update`. Its schema has no desktop membership or worktree-parent field. Setting `runtimeWorkspaceRoots` changes execution roots. Using the main checkout as `cwd` and a separate worktree environment also loses the execution directory on a cold resume in this version. Relaybot keeps the actual worktree as the thread cwd and logs a desktop link. See [usage](USAGE.md#running-the-scripts-by-hand) for filing an existing thread.
+
+### Managed worktree creation
+
+In the same build, `codex app-server generate-json-schema --experimental` exposes no worktree creation method or flag on `thread/start`. A live `worktree/create` request returned RPC error `-32600` (unknown variant). The CLI accepts `codex exec --worktree`, which starts an exec turn at detached HEAD. Running `codex --worktree app-server` was rejected. The desktop implements `create-worktree` in its own Git worker. Its inputs include `cwd`, `startingState` and `worktreesRoot`. The desktop tool named `create_worktree` is supplied by the host.
+
+Relaybot uses the on-disk convention verified in this build.
+
+1. Read `codexHome` from `initialize` and select or create the main root's project. Reserve a four-hex-digit directory under `<codexHome>/worktrees` and create a Git linked checkout named after the main folder. The slot contains the desktop marker `.codex-worktree-name`. Relaybot checks out the requested local branch, creating it from `HEAD` when necessary. Concurrent relaybot launches serialize Git creation for the same repository.
+2. Send `thread/start` with the checkout's actual `cwd` and the main `projectId`. Record the checkout and session in the run directory. Match the desktop worker's `set-worktree-owner-thread` format by writing `{"version":1,"ownerThreadId":"<thread-id>"}` at `git rev-parse --git-path codex-thread.json` in the linked checkout. A separate `codex exec --worktree` probe produced the same directory shape and private owner file.
+3. On resume, verify the linked checkout and its owner, then send the saved `threadId` to `thread/resume`. Before starting a turn, verify that both the thread's stored cwd and the server's effective cwd match the saved checkout. The main project root and the execution directory remain independent.
+
+**Verification on 26.1117.41037.** An isolated main repository, Codex home and relaybot home exercised the launcher against the bundled executable. A loopback model fixture requested real shell commands. Three turns (start plus two resumes in fresh server processes) returned the same `pwd -P`, branch and Git common directory. All three loopback webhooks reported `done` and that checkout. Two `thread/resume` calls in one process and a third after restarting it also returned the same thread ID, project ID and cwd. Shell commands in each resumed thread confirmed the directory. The main project's `thread/list` included the thread.
+
+The installed webview's `XyS0.ap` consumed the six thread/project snapshots and actual Git paths. With an empty desktop assignment map it grouped the worktree under the main root and emitted a root hint. `Pv8s.GT` included the thread using that hint. All six snapshots passed with only a shared Git common directory and again with an `origin` URL. A sibling checkout of the same repository was excluded in both cases.
 
 ## Claude Code CLI
 

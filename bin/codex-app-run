@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""codex-app-run <bot> <workdir> <run_dir> [resume]
+"""codex-app-run <bot> <workdir> <run_dir> [resume | --worktree <branch>]
 
 Runs one Codex turn through `codex app-server`, creating an interactive
 (source=vscode) thread with the matching app-server project ID when available.
@@ -30,7 +30,8 @@ Config (environment, or KEY=VALUE lines in $RELAYBOT_HOME/config.env):
   RELAYBOT_CLIENT_NAME            app-server clientInfo name (default relaybot)
   RELAYBOT_MAX_SECONDS            optional overall cap per turn (default none)
 """
-import json, os, queue, shutil, signal, socket, struct, subprocess, sys, threading, time, uuid
+import fcntl, json, os, queue, shutil, signal, socket, struct, subprocess, sys, threading, time, uuid
+from pathlib import Path
 
 
 def load_config():
@@ -74,6 +75,10 @@ def clip(s, n):
 
 class StartError(Exception):
     pass
+
+
+class RpcError(RuntimeError):
+    """The server explicitly rejected the request."""
 
 
 # ---------- desktop refresh over the Codex IPC socket ----------
@@ -165,7 +170,7 @@ class AppServer:
                 raise RuntimeError(f"app-server exited during {method}: " + " | ".join(self.stderr_tail[-5:]))
             if o.get("id") == rid and "method" not in o:
                 if "error" in o:
-                    raise RuntimeError(f"{method} error: {json.dumps(o['error'], ensure_ascii=False)[:500]}")
+                    raise RpcError(f"{method} error: {json.dumps(o['error'], ensure_ascii=False)[:500]}")
                 return o.get("result") or {}
             on_other(o)
         raise TimeoutError(method)
@@ -191,8 +196,8 @@ def real(p):
         return p
 
 
-def main_worktree_root(wd):
-    """Main worktree root when wd is the root of a linked git worktree, else None."""
+def checkout_dirs(wd):
+    """Return (private git dir, common git dir) at a checkout root."""
     try:
         r = subprocess.run(["git", "-C", wd, "rev-parse", "--path-format=absolute",
                             "--show-toplevel", "--git-dir", "--git-common-dir"],
@@ -203,12 +208,86 @@ def main_worktree_root(wd):
     if r.returncode != 0 or len(lines) != 3:
         return None
     top, git_dir, common = (real(x) for x in lines)
-    if top != real(wd) or git_dir == common or os.path.basename(common) != ".git":
+    return (git_dir, common) if top == real(wd) else None
+
+
+def git_output(wd, *args):
+    return subprocess.check_output(["git", "-C", wd, *args], text=True).rstrip("\n")
+
+
+def main_worktree_root(wd):
+    dirs = checkout_dirs(wd)
+    if not dirs or dirs[0] == dirs[1] or os.path.basename(dirs[1]) != ".git":
         return None
-    return os.path.dirname(common)
+    return os.path.dirname(dirs[1])
 
 
-def pick_project(srv, workdir, on_other):
+def create_worktree(repo, branch, codex_home, record):
+    exists = subprocess.run(["git", "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/" + branch])
+    if exists.returncode not in (0, 1):
+        raise ValueError("cannot look up branch " + branch)
+    root = (Path(codex_home) / "worktrees").resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    for _ in range(64):
+        slot = root / uuid.uuid4().hex[:4]
+        try:
+            slot.mkdir(mode=0o700)
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise StartError("could not reserve a Codex worktree directory")
+    checkout = slot / Path(repo).name
+    log(f"[codex-app-run] creating worktree {checkout} for branch {branch}")
+    args = ["--", checkout, branch] if exists.returncode == 0 else ["-b", branch, "--", checkout, "HEAD"]
+    try:
+        subprocess.run(["git", "-C", repo, "worktree", "add", *args], check=True)
+    except (OSError, subprocess.CalledProcessError):
+        if not any(slot.iterdir()):
+            slot.rmdir()
+        raise
+    record.write_text(str(checkout) + "\n", encoding="utf-8")
+    (slot / ".codex-worktree-name").touch()
+    if git_output(checkout, "symbolic-ref", "HEAD") != "refs/heads/" + branch:
+        raise StartError("Git did not check out the requested branch")
+    return str(checkout)
+
+
+def owner_file(checkout):
+    return Path(git_output(checkout, "rev-parse", "--path-format=absolute", "--git-path", "codex-thread.json"))
+
+
+def saved_worktree(record, workdir, tid):
+    checkout = record.read_text(encoding="utf-8").rstrip("\n")
+    dirs = checkout_dirs(checkout)
+    if not dirs or dirs[0] == dirs[1]:
+        raise StartError("saved linked worktree is missing: " + checkout)
+    if real(workdir) != checkout and checkout_dirs(workdir) != (dirs[1], dirs[1]):
+        raise StartError("saved worktree belongs to a different repository: " + checkout)
+    if json.loads(owner_file(checkout).read_text())["ownerThreadId"] != tid:
+        raise StartError("saved worktree belongs to a different thread")
+    return checkout
+
+
+def prepare_worktree(srv, repo, branch, codex_home, record, handle):
+    dirs = checkout_dirs(repo)
+    if not dirs or dirs[0] != dirs[1]:
+        raise ValueError("--worktree requires the root of the main Git checkout")
+    if git_output(repo, "check-ref-format", "--branch", branch) != branch:
+        raise ValueError("--worktree requires a literal local branch name")
+    if not codex_home or not os.path.isabs(codex_home):
+        raise StartError("app-server did not return its Codex home")
+    project = pick_project(srv, repo, handle, require_root=True)
+    # Git's branch-in-use check races with another simultaneous worktree add.
+    lock = os.open(dirs[1], os.O_RDONLY)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return create_worktree(repo, branch, codex_home, record), project
+    finally:
+        os.close(lock)
+
+
+def pick_project(srv, workdir, on_other, require_root=False):
     projects, cursor = [], None
     for _ in range(50):
         r = srv.request("project/list", {"cursor": cursor, "limit": 100}, on_other)
@@ -236,7 +315,7 @@ def pick_project(srv, workdir, on_other):
     fallback = real(DEFAULT_ROOT)
     default_workdir = real(os.environ.get("RELAYBOT_DEFAULT_WORKDIR") or "~/Documents/relaybot")
     grok_root = real("~/Documents/codex-for-grok")
-    if wd not in (fallback, default_workdir, grok_root):
+    if require_root or wd not in (fallback, default_workdir, grok_root):
         try:
             top = subprocess.run(["git", "-C", wd, "rev-parse", "--show-toplevel"],
                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
@@ -248,7 +327,11 @@ def pick_project(srv, workdir, on_other):
                     return project
                 raise ValueError("project/create returned no project ID")
         except (OSError, RuntimeError, KeyError, ValueError, TimeoutError) as e:
+            if require_root:
+                raise
             log("[codex-app-run] project creation failed, using fallback:", e)
+    if require_root:
+        raise StartError("could not select the main checkout's project")
     if not (os.environ.get("RELAYBOT_PROJECT_FALLBACK_ROOT") or os.environ.get("RELAYBOT_DEFAULT_WORKDIR")):
         defaults = matches(grok_root)
         if defaults:
@@ -270,11 +353,15 @@ def thread_title(bot, run):
 
 
 def main():
-    if len(sys.argv) < 4:
+    options = sys.argv[4:]
+    new_worktree = len(options) == 2 and options[0] == "--worktree" and bool(options[1])
+    if len(sys.argv) < 4 or (not new_worktree and options not in ([], [""], ["resume"])):
         print(__doc__, file=sys.stderr)
         return 2
     bot, workdir, run = sys.argv[1], sys.argv[2], sys.argv[3]
-    resume = len(sys.argv) > 4 and sys.argv[4] == "resume"
+    resume = options == ["resume"]
+    record = Path(run) / "worktree"
+    managed = new_worktree or (resume and record.is_file())
     tid = None
     if resume:
         try:
@@ -289,7 +376,8 @@ def main():
     output = os.path.join(turn_dir, "reply.md") if turn_dir else os.path.join(run, "last.md")
     max_s = float(os.environ.get("RELAYBOT_MAX_SECONDS") or 0)
     prompt = open(os.path.join(run, "prompt.md"), encoding="utf-8").read()
-    os.makedirs(workdir, exist_ok=True)
+    if not managed:
+        os.makedirs(workdir, exist_ok=True)
 
     state = {"tid": None, "turn": None, "done": None, "last": None, "last_ping": 0.0, "notified_auth": False}
     srv = None
@@ -387,11 +475,11 @@ def main():
         elif m == "error":
             log("[error]", clip(json.dumps(p, ensure_ascii=False), 800))
 
-    # ---- start: anything failing here means "no thread was created" -> 97 ----
+    # ---- initialize the server, then open the thread and start the turn ----
     try:
         srv = AppServer(env={**os.environ, "RELAYBOT_RUN_DIR": run})
-        srv.request("initialize", {"clientInfo": {"name": CLIENT, "title": CLIENT, "version": "0.1.0"},
-                                   "capabilities": {"experimentalApi": True, "requestAttestation": False}}, handle, timeout=60)
+        init = srv.request("initialize", {"clientInfo": {"name": CLIENT, "title": CLIENT, "version": "0.1.0"},
+                                          "capabilities": {"experimentalApi": True, "requestAttestation": False}}, handle, timeout=60)
         srv.send({"method": "initialized"})
         state["started"] = True
         common = {"approvalPolicy": "never", "sandbox": SANDBOX}
@@ -400,27 +488,52 @@ def main():
         if EFFORT:
             common["config"] = {"model_reasoning_effort": EFFORT}
         if resume:
-            th = srv.request("thread/resume", {"threadId": tid, **common}, handle)["thread"]
+            if managed:
+                workdir = saved_worktree(record, workdir, tid)
+            result = srv.request("thread/resume", {"threadId": tid, **common}, handle)
+            th = result["thread"]
             if th.get("id") != tid:
                 raise StartError("thread/resume returned a different thread ID")
             print(f"session id: {tid}", flush=True)
             log(f"[codex-app-run] resumed thread, cwd={th.get('cwd')} project={th.get('projectId')}")
         else:
             proj = None
-            try:
-                proj = pick_project(srv, workdir, handle)
-            except Exception as e:
-                log("[codex-app-run] project lookup failed, continuing without project:", e)
+            if new_worktree:
+                repo = real(workdir)
+                workdir, proj = prepare_worktree(srv, repo, options[1], init.get("codexHome"), record, handle)
+            else:
+                try:
+                    proj = pick_project(srv, workdir, handle)
+                except Exception as e:
+                    log("[codex-app-run] project lookup failed, continuing without project:", e)
             params = {"cwd": real(workdir), "threadSource": "user", **common}
             if proj:
                 params["projectId"] = proj["id"]
-            th = srv.request("thread/start", params, handle)["thread"]
+            try:
+                result = srv.request("thread/start", params, handle)
+            except RpcError:
+                # Only release a clean checkout on a definite rejection. A lost reply may own a thread.
+                if new_worktree and subprocess.run(["git", "-C", repo, "worktree", "remove", workdir]).returncode == 0:
+                    record.unlink()
+                    slot = Path(workdir).parent
+                    (slot / ".codex-worktree-name").unlink()
+                    slot.rmdir()
+                raise
+            th = result["thread"]
             tid = th["id"]
             with open(os.path.join(run, "session"), "w") as f:
                 f.write(tid + "\n")
             print(f"session id: {tid}", flush=True)
             log(f"[codex-app-run] new thread cwd={real(workdir)} project={(proj or {}).get('name')} "
                 f"({(proj or {}).get('id')}) desktop=codex://threads/{tid}")
+        if managed and any(not cwd or real(cwd) != workdir for cwd in (result.get("cwd"), th.get("cwd"))):
+            raise StartError("app-server returned a different worktree cwd")
+        if new_worktree:
+            if th.get("projectId") != proj["id"]:
+                raise StartError("app-server returned a different project")
+            with owner_file(workdir).open("x", encoding="utf-8") as f:
+                json.dump({"version": 1, "ownerThreadId": tid}, f)
+        if not resume:
             try:
                 srv.request("thread/name/set", {"threadId": tid, "name": thread_title(bot, run)}, handle, timeout=30)
             except Exception as e:
