@@ -82,6 +82,8 @@ def read_turn(proc, run, turn, sid):
                 sid = reported
                 (run / "session").write_text(sid + "\n")
                 print("session id:", sid, flush=True)
+            if (kind, subtype) == ("system", "init") and frame.get("permissionMode"):
+                print(f"{turn.name} permissionMode: {frame['permissionMode']}", flush=True)
 
         # End the child while the request is outstanding. It cannot run the tool
         # or try an alternative after a denial. SIGTERM lets Claude flush its session.

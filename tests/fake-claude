@@ -36,7 +36,8 @@ assert user["type"] == "user" and user["message"]["role"] == "user"
 with Path(os.environ["TRACE"]).open("a") as trace:
     print(json.dumps(dict(input=user["message"]["content"], cwd=os.getcwd(), skip_permissions=args.dangerously_skip_permissions,
                           resume=str(args.resume) if args.resume else None)), file=trace)
-emit("system", subtype="init", session_id=sid)
+emit("system", subtype="init", session_id=sid,
+     permissionMode=cfg.get("permission_mode", "bypassPermissions" if args.dangerously_skip_permissions else "default"))
 case = cfg.get("case")
 tool = dict(tool_name="Bash", input={"command": "echo test"})
 if case == "question":

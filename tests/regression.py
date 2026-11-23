@@ -169,8 +169,10 @@ class Runs(unittest.TestCase):
 
     def test_claude_permission_opt_out(self):
         (self.home / 'config.env').write_text('RELAYBOT_CLAUDE_SKIP_PERMISSIONS=0\n')
-        self.finish(self.launch('claude', case='permission'), 'needs_auth')
+        run = self.finish(self.launch('claude', case='permission', permission_mode='plan'), 'needs_auth')
         self.assertFalse(self.records()[-1]['skip_permissions'])
+        turn = (run / 'pause').read_text().strip()
+        self.assertIn(f'{turn} permissionMode: plan', (run / 'log.txt').read_text())
 
     def test_claude_results(self):
         for cfg, status, rc in [
