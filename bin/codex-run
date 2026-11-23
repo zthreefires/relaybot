@@ -48,8 +48,8 @@ if [ $# -eq 1 ] && [ "$1" = "--login-status" ]; then
 fi
 PY=${RELAYBOT_PYTHON:-$(command -v python3 || echo /usr/bin/python3)}
 RUN_ROOT=${RELAYBOT_RUN_ROOT:-/tmp}
-if [ "${1:-}" = -handoff ]; then
-  [ $# -eq 3 ] || { echo "usage: $runner -handoff <run_dir> <workdir|->" >&2; exit 2; }
+if [ "${1:-}" = /handoff ]; then
+  [ $# -eq 3 ] || { echo "usage: $runner /handoff <run_dir> <workdir|->" >&2; exit 2; }
   workdir=$3
   if [ -z "$workdir" ] || [ "$workdir" = - ]; then workdir=${RELAYBOT_DEFAULT_WORKDIR:-$HOME/Documents/relaybot}; fi
   exec "$PY" "$here/desktop_handoff.py" "$agent" "$binary" "$RUN_ROOT" "$2" "$workdir"

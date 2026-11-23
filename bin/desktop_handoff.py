@@ -1,4 +1,4 @@
-"""Open one previously dispatched session. Invoked only by a runner's -handoff command."""
+"""Open one previously dispatched session. Invoked only by a runner's /handoff command."""
 import fcntl
 import os
 from pathlib import Path

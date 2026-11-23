@@ -8,13 +8,13 @@ Codex app-server threads are visible in the desktop. Claude uses the local CLI.
 
 ## Layout
 
-- `bin/codex-run`, `bin/claude-run`: shared bash launcher, selected by executable name. Explicit `-handoff` requests use `bin/desktop_handoff.py` to open the saved session.
+- `bin/codex-run`, `bin/claude-run`: shared bash launcher, selected by executable name. Explicit `/handoff` requests use `bin/desktop_handoff.py` to open the saved session.
 - `bin/claude-stream-run`: Claude Code stream-json client (python3), including permission stops. `bin/claude_preference.py` coordinates the installation-wide permission question.
 - `bin/codex-app-run`: Codex app-server client (python3); desktop-visible threads, project pick, IPC refresh.
 - `bin/codex-notify`: webhook poster with per-pause dedupe (python3).
 - `bin/codex-relay-hook`: shared turn-status resolver and pause recorder (not a Codex hook; relaybot passes no hooks).
 - `bin/relaybot-doctor`: checks the install and each CLI's sign-in status. An explicit `--webhook-test` sends a test event.
-- `skills/codex` dispatches to either runner. `skills/claude` uses that workflow with `claude-run` for `/claude`. `skills/relaybot-setup` checks both and wires one webhook per bot.
+- `skills/codex` dispatches to either runner. `skills/claude` uses that workflow with `claude-run` for `/claude`. `skills/handoff` opens the current task on the desktop. `skills/relaybot-setup` checks both and wires one webhook per bot.
 - `docs/ARCHITECTURE.md`: flow, run dir, event contract. `docs/INSTALL.md`, `docs/USAGE.md`,
   `docs/INSTALL_FOR_AGENTS.md`.
 - `config.example.env`, `examples/`: sample config, webhook file, event, task, routine prompt.

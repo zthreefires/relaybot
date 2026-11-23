@@ -41,9 +41,9 @@ Use the same bot, webhook and workdir selection as for `/codex`. The bot starts 
 
 ## Open the current task on desktop
 
-Send `-handoff` in the bot chat. The bot opens the Codex thread or the Claude Desktop Code session for the task you are discussing. With multiple possible tasks, reply to the result you want. Regular results carry the session ID as metadata and open the desktop only on your request.
+Send `/handoff` in the bot chat. The bot opens the Codex thread or the Claude Desktop Code session for the task you are discussing. With multiple possible tasks, reply to the result you want. Regular results carry the session ID as metadata and open the desktop only on your request.
 
-The local command is `<runner> -handoff "<run_dir>" "<workdir>"`, using the runner that created the task. Codex opens its thread link. Claude waits for the relaybot turn to exit, then runs `claude --desktop --resume <session_id>` in the original workdir. If an interactive Claude terminal still owns the session, use `/desktop` there. On macOS, Claude handoff requires Claude Desktop and Claude Code 2.1.285 or later signed in with a Claude subscription. [Claude Desktop session handoff](https://code.claude.com/docs/en/desktop#desktop-vs-cli)
+The local command is `<runner> /handoff "<run_dir>" "<workdir>"`, using the runner that created the task. Codex opens its thread link. Claude waits for the relaybot turn to exit, then runs `claude --desktop --resume <session_id>` in the original workdir. If an interactive Claude terminal still owns the session, use `/desktop` there. On macOS, Claude handoff requires Claude Desktop and Claude Code 2.1.285 or later signed in with a Claude subscription. [Claude Desktop session handoff](https://code.claude.com/docs/en/desktop#desktop-vs-cli)
 
 ## Running the scripts by hand
 

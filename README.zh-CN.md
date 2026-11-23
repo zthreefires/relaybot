@@ -101,7 +101,7 @@ git clone https://github.com/zthreefires/relaybot.git ~/relaybot 2>/dev/null || 
 
 若要测已安装的脚本而不是仓库里的 `bin/`，运行 `~/relaybot/tests/selftest.sh ~/bin`。
 
-3. 把 [`skills/codex/SKILL.md`](skills/codex/SKILL.md)、[`skills/claude/SKILL.md`](skills/claude/SKILL.md) 和 [`skills/relaybot-setup/SKILL.md`](skills/relaybot-setup/SKILL.md) 装进当前 agent 的技能库。
+3. 把 [`skills/codex/SKILL.md`](skills/codex/SKILL.md)、[`skills/claude/SKILL.md`](skills/claude/SKILL.md)、[`skills/handoff/SKILL.md`](skills/handoff/SKILL.md) 和 [`skills/relaybot-setup/SKILL.md`](skills/relaybot-setup/SKILL.md) 装进当前 agent 的技能库。
 
 ## 给 bot 接线
 
@@ -127,7 +127,7 @@ git clone https://github.com/zthreefires/relaybot.git ~/relaybot 2>/dev/null || 
 /relaybot-setup                  # 每个 bot 一次；可重复执行
 /codex <使用者要做的事>
 /claude <使用者要做的事>
--handoff                         # 在对应的桌面端打开当前任务
+/handoff                         # 在对应的桌面端打开当前任务
 ```
 
 1. 把任务和相关上下文写入使用者电脑上的 UTF-8 文件。用使用者指定的目录，或确认 `RELAYBOT_REPOS_ROOT` 下已有对应 clone。判断不了项目时先询问。只有与已有项目无关的任务才传 `-`。

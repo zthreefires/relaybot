@@ -101,7 +101,7 @@ Then:
 
 To test the installed copies instead of `bin/` in the clone, run `~/relaybot/tests/selftest.sh ~/bin`.
 
-3. Install [`skills/codex/SKILL.md`](skills/codex/SKILL.md), [`skills/claude/SKILL.md`](skills/claude/SKILL.md), and [`skills/relaybot-setup/SKILL.md`](skills/relaybot-setup/SKILL.md) into this agent's skill store.
+3. Install [`skills/codex/SKILL.md`](skills/codex/SKILL.md), [`skills/claude/SKILL.md`](skills/claude/SKILL.md), [`skills/handoff/SKILL.md`](skills/handoff/SKILL.md), and [`skills/relaybot-setup/SKILL.md`](skills/relaybot-setup/SKILL.md) into this agent's skill store.
 
 ## Wire a bot
 
@@ -127,7 +127,7 @@ Use `/codex` or `/claude` and follow [`skills/codex/SKILL.md`](skills/codex/SKIL
 /relaybot-setup                  # once per bot; safe to re-run
 /codex <what the user wants done>
 /claude <what the user wants done>
--handoff                         # open this task in its desktop app
+/handoff                         # open this task in its desktop app
 ```
 
 1. Write the task and relevant context to a UTF-8 file on the user's computer. Use the folder the user named or verify the existing clone under `RELAYBOT_REPOS_ROOT`. Ask if the project is unclear. Use `-` for a task tied to no project.

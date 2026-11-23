@@ -178,7 +178,7 @@ class Runs(unittest.TestCase):
         self.assertNotIn('permission_question_turn', self.payload)
 
     def handoff(self, agent, run, workdir, **cfg):
-        return subprocess.Popen([BIN / (agent + '-run'), '-handoff', run, workdir],
+        return subprocess.Popen([BIN / (agent + '-run'), '/handoff', run, workdir],
                                 env=dict(self.env, FIXTURE=json.dumps(cfg)), stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
