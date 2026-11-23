@@ -72,6 +72,8 @@ def main():
     if event != "test":
         sid = read(run / "session").strip() or None
         resume = "claude --resume" if run.name.startswith("claude-run-") else "codex resume"
+        if sid and resume == "claude --resume" and sys.platform == "darwin":
+            msg = f"Open in Claude Desktop: claude --desktop --resume {sid}\n" + msg
         if sid and resume not in msg:
             msg = f"View session: {resume} {sid}\n" + msg
         reply = read(run / "last.md")

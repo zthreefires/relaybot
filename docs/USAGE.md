@@ -39,6 +39,8 @@ the desktop by hand.
 
 Use the same bot, webhook and workdir selection as for `/codex`. The bot starts `claude-run`. Claude Code runs in CLI print mode. An approval or structured question produces `needs_auth` and the bot relays the request. After you respond, it passes your text to a new turn in that session. If the tool still needs interactive approval, open `claude --resume <id>` in the original directory. A question in ordinary reply text can arrive as `done`. The bot reads it and waits for your answer.
 
+On macOS, the webhook also includes `claude --desktop --resume <session_id>`. Run it in a terminal in the original workdir when you want to open the conversation in Claude Desktop’s Code tab. Until then, the session stays in CLI history. The command requires Claude Desktop and Claude Code 2.1.285 or later signed in with a Claude subscription. [Claude Desktop session handoff](https://code.claude.com/docs/en/desktop#desktop-vs-cli)
+
 ## Running the scripts by hand
 
 ```bash

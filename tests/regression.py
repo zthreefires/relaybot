@@ -143,6 +143,7 @@ class Runs(unittest.TestCase):
             self.assertEqual(run.stat().st_mode & 0o777, 0o700)
             sid = self.payload['session_id']
             self.assertIn('claude --resume ' + sid, self.message)
+            self.assertEqual('claude --desktop --resume ' + sid in self.message, sys.platform == 'darwin')
             self.assertIn(reason, self.message)
             self.assertEqual((self.payload['exit_code'], self.payload['reply'], self.payload['reply_file']),
                              (0, '', None))
