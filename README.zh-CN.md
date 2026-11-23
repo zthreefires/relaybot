@@ -57,7 +57,7 @@
 两个入口都会原样传入任务正文，共用 `done`、`needs_auth`、`failed` 事件。webhook 带会话 ID、退出码和最多 8000 个字符的最终回复。有回复时也会给出全文的本机路径。
 
 - **Codex** 按 Git 根目录选择 app-server 项目。任务需要隔离时，用 `codex-run <bot> "<主仓库>" /tmp/task.md --worktree "<分支>"` 在 Codex 托管目录下检出分支。桌面侧栏将会话归入主仓库项目，重启 app-server 后续接也在同一工作树中执行。隔离任务需要 app-server，普通任务保留 `codex exec` 回退。[工作树用法](docs/USAGE.md#isolated-codex-tasks)
-- **Claude Code** 通过本机 `claude -p` 运行。新任务和续接任务默认带上 `--dangerously-skip-permissions`，跳过常规工具权限确认。设置 `RELAYBOT_CLAUDE_SKIP_PERMISSIONS=0` 可使用 Claude 自身的权限配置。收到工具授权请求或结构化提问时，以 `needs_auth` 停下。bot 可以把你的答复送回原会话。如果需要在终端交互授权，可在原工作目录运行 `claude --resume <id>`。只写在最终回复里的问题以 `done` 回传，由 bot 转述。
+- **Claude Code** 通过本机 `claude -p` 运行。新任务和续接任务都沿用 Claude 本地权限。任务遇到常规工具审批时，bot 会询问以后是否添加 `--dangerously-skip-permissions`。选“要”会续接当前会话，选“不要”会让任务保持暂停。这台机器上的 relaybot 会记住你的选择。收到工具授权请求或结构化提问时，以 `needs_auth` 停下。bot 可以把你的答复送回原会话。如果需要在终端交互授权，可在原工作目录运行 `claude --resume <id>`。只写在最终回复里的问题以 `done` 回传，由 bot 转述。
 
 流程、运行目录和事件约定见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
@@ -83,7 +83,7 @@ git clone https://github.com/zthreefires/relaybot.git ~/relaybot 2>/dev/null || 
 
 如果因为仓库是私有的，`git clone` 失败，改用已登录的 `gh repo clone zthreefires/relaybot ~/relaybot`，再运行 `install.sh`。
 
-这会把 `claude-run`、`claude-stream-run`、`codex-run`、`codex-app-run`、`codex-notify`、`codex-relay-hook`、`relaybot-doctor` 复制到前缀目录（默认 `~/bin`），创建权限为 700 的 `~/.config/relaybot/` 和 `webhooks/`，并只在 `~/.config/relaybot/config.env` 还不存在时，从 [config.example.env](config.example.env) 复制一份。
+这会把 `claude-run`、`claude-stream-run`、`claude_preference.py`、`codex-run`、`codex-app-run`、`codex-notify`、`codex-relay-hook`、`relaybot-doctor` 复制到前缀目录（默认 `~/bin`），创建权限为 700 的 `~/.config/relaybot/` 和 `webhooks/`，并只在 `~/.config/relaybot/config.env` 还不存在时，从 [config.example.env](config.example.env) 复制一份。
 
 然后：
 
@@ -154,6 +154,7 @@ git clone https://github.com/zthreefires/relaybot.git ~/relaybot 2>/dev/null || 
 
 - 有 CLI 需要安装或登录时，请使用者在自己的电脑上处理。
 - 他们关心的配置（`RELAYBOT_REPOS_ROOT`、`RELAYBOT_DEFAULT_WORKDIR`、模型和推理强度）。
+- Claude 任务因常规工具审批暂停且尚未设置偏好时，询问今后的任务是否跳过工具权限确认。
 - 粘贴所用例程的 webhook URL，并用密钥请求提供密钥。
 - 若希望默认或后备工作目录上的运行也出现在桌面端，请他们为该目录创建 Codex 项目。
 - 如果这个 bot 的说明禁止例程、webhook 或主动消息，先征得创建 webhook 例程的许可。
@@ -164,7 +165,7 @@ git clone https://github.com/zthreefires/relaybot.git ~/relaybot 2>/dev/null || 
 
 - 不要打印、回显或粘贴 webhook 密钥（聊天、日志、记忆、例程 prompt、提交都不行）。
 - `~/.config/relaybot/` 和 `webhooks/` 权限保持 700，每个 `<slug>.json` 保持 600。不要提交这些文件。
-- 有运行正在进行时，不要改安装前缀里正在使用的脚本，也不要改 `config.env`。
+- 任务运行期间应避免手工修改已安装的脚本和 `config.env`。权限选择命令会加锁保存用户的决定。
 - `install.sh` 会更新前缀里的脚本。如果任一入口有任务在跑，等它结束后再装。
 - 不要添加 `--dangerously-bypass-approvals-and-sandbox`。其余 Codex 配置保持原样。
 - 汇报所选 agent 已完成的工作前，先用 `last.md` 或日志核实。

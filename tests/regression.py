@@ -148,14 +148,14 @@ class Runs(unittest.TestCase):
             self.assertEqual((self.payload['exit_code'], self.payload['reply'], self.payload['reply_file']),
                              (0, '', None))
             self.assertEqual((run / 'prompt.md').read_bytes(), self.task.read_bytes())
-            self.assertEqual(self.records()[-1], dict(cwd=str(self.work), resume=None, skip_permissions=True,
+            self.assertEqual(self.records()[-1], dict(cwd=str(self.work), resume=None, skip_permissions=False,
                                                       input=self.task.read_bytes().decode()))
             follow = run / 'followup.md'
             follow.write_text('  继续')
             self.reject(self.launch(task=follow, resume=True))
             reply = '好' * 8001
             self.assertEqual(self.finish(self.launch('claude', task=follow, resume=True, reply=reply), 'done'), run)
-            self.assertEqual(self.records()[-1], dict(cwd=str(self.work), resume=sid, skip_permissions=True, input='  继续'))
+            self.assertEqual(self.records()[-1], dict(cwd=str(self.work), resume=sid, skip_permissions=False, input='  继续'))
             self.assertEqual(self.payload['session_id'], sid)
             self.assertEqual(self.payload['reply'], reply[:8000])
             self.assertTrue(self.payload['reply_truncated'])
@@ -173,6 +173,100 @@ class Runs(unittest.TestCase):
         self.assertFalse(self.records()[-1]['skip_permissions'])
         turn = (run / 'pause').read_text().strip()
         self.assertIn(f'{turn} permissionMode: plan', (run / 'log.txt').read_text())
+        self.assertNotIn('permission_question_turn', self.payload)
+
+    def permission_choice(self, run, turn, choice, bot='test', cwd=None, task=None):
+        return subprocess.Popen([BIN / 'claude-run', bot, cwd or self.work, task or run / 'task.md',
+                                 '--permission-choice', turn, choice], env=dict(self.env, FIXTURE=json.dumps({'reply': DONE})),
+                                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def test_permission_choice_yes(self):
+        config = self.home / 'config.env'
+        config.write_bytes(b'# keep this line\r\nRELAYBOT_CLAUDE_SKIP_PERMISSIONS=\r\n# last comment')
+        run = self.finish(self.launch('claude', case='permission'), 'needs_auth')
+        turn = self.payload['permission_question_turn']
+        sid = self.payload['session_id']
+        self.assertEqual(self.payload['pause_kind'], 'tool_approval')
+        self.reject(self.permission_choice(run, turn, 'yes'))  # no outstanding question yet
+        self.assertEqual(self.permission_choice(run, turn, 'ask').communicate()[0].strip(), 'ask')
+        self.reject(self.permission_choice(run, turn, 'yes', bot='other'))
+        self.reject(self.permission_choice(run, turn, 'yes', cwd=self.root))
+        follow = run / 'followup.md'
+        follow.write_text('Yes, skip future permission prompts and continue.')
+        self.finish(self.permission_choice(run, turn, 'yes', task=follow), 'done')
+        self.assertEqual(self.records()[-1], dict(input=follow.read_text(), resume=sid, skip_permissions=True,
+                                                  cwd=str(self.work)))
+        self.assertEqual(config.read_bytes(), b'# keep this line\r\nRELAYBOT_CLAUDE_SKIP_PERMISSIONS=1\r\n# last comment')
+        self.reject(self.permission_choice(run, turn, 'yes', task=follow))
+        self.assertEqual(len(self.records()), 2)
+        self.finish(self.launch('claude'), 'done')
+        self.assertTrue(self.records()[-1]['skip_permissions'])
+
+    def test_permission_choice_no_and_concurrent_questions(self):
+        a = self.finish(self.launch('claude', case='permission'), 'needs_auth')
+        first = self.payload['permission_question_turn']
+        b = self.finish(self.launch('claude', case='permission'), 'needs_auth')
+        second = self.payload['permission_question_turn']
+        self.assertFalse(self.records()[-1]['skip_permissions'])
+        questions = [(a, first), (b, second)]
+        claims = [self.permission_choice(run, turn, 'ask') for run, turn in questions]
+        results = [p.communicate()[0].strip() for p in claims]
+        self.assertCountEqual(results, ['ask', 'skip'])
+        run, turn = questions[results.index('ask')]
+        self.assertEqual(self.permission_choice(run, turn, 'ask').communicate()[0].strip(), 'skip')
+        reply = self.permission_choice(run, turn, 'no')
+        out, err = reply.communicate(timeout=10)
+        self.assertEqual(reply.returncode, 0, out + err)
+        self.assertEqual(len(self.records()), 2)
+        self.finish(self.launch('claude', case='permission'), 'needs_auth')
+        self.assertFalse(self.records()[-1]['skip_permissions'])
+        self.assertNotIn('permission_question_turn', self.payload)
+        self.assertEqual((self.home / 'config.env').read_text(), 'RELAYBOT_CLAUDE_SKIP_PERMISSIONS=0\n')
+
+    def test_permission_offer_exclusions(self):
+        for cfg in [dict(case='question'), dict(case='denied'), dict(case='permission', permission_mode='bypassPermissions'),
+                    dict(case='permission', request_fields={'matched_ask_rule': {'source': 'policySettings'}}),
+                    dict(case='permission', request_fields={'suppress_always_allow_rule': True}),
+                    dict(error='authentication_failed', is_error=True, rc=1)]:
+            with self.subTest(cfg=cfg):
+                self.finish(self.launch('claude', **cfg), 'needs_auth')
+                self.assertIn('pause_kind', self.payload)
+                self.assertNotIn('permission_question_turn', self.payload)
+        self.env['RELAYBOT_CLAUDE_SKIP_PERMISSIONS'] = '0'
+        self.finish(self.launch('claude', case='permission'), 'needs_auth')
+        self.assertNotIn('permission_question_turn', self.payload)
+
+    def test_codex_local_permissions(self):
+        run = self.finish(self.launch('app'), 'done')
+        self.finish(self.launch('app', task=run / 'task.md', resume=True), 'done')
+        requests = [r['params'] for r in self.records() if r.get('method') in ('thread/start', 'thread/resume')]
+        self.assertEqual(len(requests), 2)
+        for params in requests:
+            self.assertNotIn('sandbox', params)
+            self.assertNotIn('approvalPolicy', params)
+        self.env['RELAYBOT_SANDBOX'] = 'read-only'
+        self.finish(self.launch('app'), 'done')
+        params = [r['params'] for r in self.records() if r.get('method') == 'thread/start'][-1]
+        self.assertEqual(params['sandbox'], 'read-only')
+        self.assertNotIn('approvalPolicy', params)
+        run = self.finish(self.launch('exec'), 'done')
+        self.finish(self.launch('exec', task=run / 'task.md', resume=True), 'done')
+        exec_calls = [r['argv'] for r in self.records() if 'exec' in r.get('argv', [])]
+        self.assertEqual(len(exec_calls), 2)
+        for args in exec_calls:
+            self.assertIn('sandbox_mode=read-only', args)
+
+    def test_permission_offer_after_stale_turn(self):
+        old = self.finish(self.launch('claude', case='permission'), 'needs_auth')
+        turn = self.payload['permission_question_turn']
+        self.assertEqual(self.permission_choice(old, turn, 'ask').communicate()[0].strip(), 'ask')
+        other = self.finish(self.launch('claude', case='permission'), 'needs_auth')
+        current = self.payload['permission_question_turn']
+        self.assertFalse(self.records()[-1]['skip_permissions'])
+        self.assertEqual(self.permission_choice(other, current, 'ask').communicate()[0].strip(), 'skip')
+        self.finish(self.launch('claude', task=old / 'task.md', resume=True), 'done')
+        self.reject(self.permission_choice(old, turn, 'yes'))
+        self.assertEqual(self.permission_choice(other, current, 'ask').communicate()[0].strip(), 'ask')
 
     def test_claude_results(self):
         for cfg, status, rc in [

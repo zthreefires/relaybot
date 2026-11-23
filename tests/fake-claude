@@ -44,7 +44,10 @@ if case == "question":
     tool = dict(tool_name="AskUserQuestion", input={"questions": [
         {"question": "Which format?", "options": [{"label": "JSON"}, {"label": "Text"}]}]})
 if case in ("permission", "question"):
-    emit("control_request", request_id="ask1", request=dict(subtype="can_use_tool", **tool))
+    prompt = dict(subtype="can_use_tool", permission_suggestions=[
+        {"type": "addRules", "behavior": "allow", "rules": [{"toolName": tool["tool_name"]}]}], **tool)
+    prompt.update(cfg.get("request_fields", {}))
+    emit("control_request", request_id="ask1", request=prompt)
     # The tool is waiting. The launcher must stop this process without granting it.
     if sys.stdin.buffer.readline():
         with Path(os.environ["TRACE"]).open("a") as trace:

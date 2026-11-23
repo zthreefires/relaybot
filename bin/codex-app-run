@@ -24,7 +24,7 @@ Config (environment, or KEY=VALUE lines in $RELAYBOT_HOME/config.env):
   RELAYBOT_CODEX_BIN              codex binary (default: desktop-bundled codex, else `codex` on PATH)
   RELAYBOT_MODEL                  model (default: unset = Codex's own default)
   RELAYBOT_EFFORT                 reasoning effort (default: unset = Codex's own default)
-  RELAYBOT_SANDBOX                sandbox mode (default danger-full-access)
+  RELAYBOT_SANDBOX                optional sandbox override (default: Codex configuration)
   RELAYBOT_PROJECT_FALLBACK_ROOT  desktop project root used when no project matches workdir
                                   (default RELAYBOT_DEFAULT_WORKDIR, else ~/Documents/relaybot)
   RELAYBOT_CLIENT_NAME            app-server clientInfo name (default relaybot)
@@ -55,7 +55,7 @@ CODEX = os.environ.get("RELAYBOT_CODEX_BIN") or (
     DESKTOP_CODEX if os.access(DESKTOP_CODEX, os.X_OK) else (shutil.which("codex") or "codex"))
 MODEL = os.environ.get("RELAYBOT_MODEL") or None
 EFFORT = os.environ.get("RELAYBOT_EFFORT") or None
-SANDBOX = os.environ.get("RELAYBOT_SANDBOX") or "danger-full-access"
+SANDBOX = os.environ.get("RELAYBOT_SANDBOX")
 DEFAULT_ROOT = os.path.expanduser(os.environ.get("RELAYBOT_PROJECT_FALLBACK_ROOT")
                                   or os.environ.get("RELAYBOT_DEFAULT_WORKDIR") or "~/Documents/relaybot")
 CLIENT = os.environ.get("RELAYBOT_CLIENT_NAME") or "relaybot"
@@ -482,7 +482,9 @@ def main():
                                           "capabilities": {"experimentalApi": True, "requestAttestation": False}}, handle, timeout=60)
         srv.send({"method": "initialized"})
         state["started"] = True
-        common = {"approvalPolicy": "never", "sandbox": SANDBOX}
+        common = {}
+        if SANDBOX:
+            common["sandbox"] = SANDBOX
         if MODEL:
             common["model"] = MODEL
         if EFFORT:

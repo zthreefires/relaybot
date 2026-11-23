@@ -81,6 +81,12 @@ def main():
         extra = dict(session_id=sid, exit_code=int(code) if code.lstrip("-").isdigit() else None,
                      reply=reply[:REPLY_MAX], reply_truncated=len(reply) > REPLY_MAX,
                      reply_file=str(run / "last.md") if reply else None)
+        if final and event == "needs_auth":
+            status = json.loads(read(run / "status.json") or "{}")
+            if status.get("pause") == pause and status.get("pause_kind"):
+                extra["pause_kind"] = status["pause_kind"]
+                if status.get("permission_question"):
+                    extra["permission_question_turn"] = pause
     base = Path(os.environ.get("RELAYBOT_HOME") or "~/.config/relaybot").expanduser()
     body = dict(event=event, run_id=run.name, run_dir=run_dir, workdir=workdir, message=msg[:2000],
                 ts=int(time.time()), **extra)

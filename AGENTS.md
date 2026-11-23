@@ -9,7 +9,7 @@ Codex app-server threads are visible in the desktop. Claude uses the local CLI.
 ## Layout
 
 - `bin/codex-run`, `bin/claude-run`: shared bash launcher, selected by executable name.
-- `bin/claude-stream-run`: Claude Code stream-json client (python3), including permission stops.
+- `bin/claude-stream-run`: Claude Code stream-json client (python3), including permission stops. `bin/claude_preference.py` coordinates the installation-wide permission question.
 - `bin/codex-app-run`: Codex app-server client (python3); desktop-visible threads, project pick, IPC refresh.
 - `bin/codex-notify`: webhook poster with per-pause dedupe (python3).
 - `bin/codex-relay-hook`: shared turn-status resolver and pause recorder (not a Codex hook; relaybot passes no hooks).

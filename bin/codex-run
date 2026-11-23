@@ -12,10 +12,11 @@ print_flag="--print-$agent-bin"
 RELAYBOT_HOME=${RELAYBOT_HOME:-$HOME/.config/relaybot}
 if [ -f "$RELAYBOT_HOME/config.env" ]; then
   # Values already in the environment win over the file.
-  while IFS='=' read -r k v; do
+  while IFS='=' read -r k v || [ -n "$k" ]; do
     case $k in ''|\#*) continue ;; esac
     k=$(printf '%s' "$k" | tr -d '[:space:]')
     case $k in RELAYBOT_*) ;; *) continue ;; esac
+    v=${v%$'\r'}
     v=${v%\"}; v=${v#\"}
     if [ -z "${!k:-}" ]; then export "$k=${v/#\~/$HOME}"; fi
   done < "$RELAYBOT_HOME/config.env"
@@ -46,14 +47,21 @@ if [ $# -eq 1 ] && [ "$1" = "--login-status" ]; then
   exec "$binary" login status
 fi
 mode=${4:-}
+choice=""
 usage() {
   echo "usage: $runner <bot> <workdir|-> <task_file> [resume]" >&2
   if [ "$agent" = codex ]; then echo "       codex-run <bot> <main-repo> <task_file> --worktree <branch>" >&2; fi
+  if [ "$agent" = claude ]; then echo "       claude-run <bot> <workdir> <file-in-run-dir> --permission-choice <turn> ask|yes|no" >&2; fi
   exit 2
 }
 case "$#:$mode" in
   3:|4:|4:resume) ;;
   5:--worktree) [ "$agent" = codex ] && [ -n "$2" ] && [ "$2" != - ] && [ -n "$5" ] || usage ;;
+  6:--permission-choice)
+    [ "$agent" = claude ] || usage
+    case "$6" in ask|yes|no) choice=$6 ;; *) usage ;; esac
+    question_turn=$5
+    mode=resume ;;
   *) usage ;;
 esac
 bot=$1; workdir=$2; task=$3
@@ -76,12 +84,18 @@ managed=
 if [ "$mode" = --worktree ] || { [ "$agent" = codex ] && [ "$mode" = resume ] && [ -f "$run/worktree" ]; }; then
   managed=1
 else
-  mkdir -p "$workdir" || die "cannot open workdir: $workdir"
+  if [ -z "$choice" ]; then mkdir -p "$workdir" || die "cannot open workdir: $workdir"; fi
 fi
 if [ "$mode" != resume ]; then
   mkdir -p "$RUN_ROOT" || die "cannot create run root"
   run=$(mktemp -d "$RUN_ROOT/$runner-XXXXXXXX") || die "cannot create private run directory"
   run=$(cd "$run" && pwd) || die "cannot open run directory"
+fi
+# Webhook delivery can precede the original runner releasing its lock. Claiming a
+# chat question only reads this run; the helper serializes claims per installation.
+if [ "$choice" = ask ]; then
+  sid=$(cat "$run/session") || die "cannot read session ID"
+  exec "$PY" "$here/claude_preference.py" "$bot" "$run" "$question_turn" "$workdir" "$sid" ask
 fi
 # flock the open directory description inherited from bash. The kernel releases
 # the lock on exit, including after a crash. No platform-specific flock CLI.
@@ -96,6 +110,11 @@ if [ "$mode" = resume ]; then
     [[ $sid =~ $uuid ]] || die "invalid Claude session UUID in $run/session"
   fi
   export RELAYBOT_RESUME_ID=$sid
+fi
+if [ -n "$choice" ]; then
+  "$PY" "$here/claude_preference.py" "$bot" "$run" "$question_turn" "$workdir" "$sid" "$choice" || exit 1
+  if [ "$choice" = no ]; then echo "Claude will use local permissions. The task is paused."; exit 0; fi
+  export RELAYBOT_CLAUDE_SKIP_PERMISSIONS=1
 fi
 turn=$(mktemp -d "$run/turn-XXXXXXXX") || die "cannot create private turn directory"
 if ! cat "$task" > "$turn/input.md"; then
@@ -138,6 +157,7 @@ elif [ "$agent" = codex ] && [ $rc -eq 97 ]; then
   model_args=(); [ -n "${RELAYBOT_MODEL:-}" ] && model_args=(-m "$RELAYBOT_MODEL")
   effort_args=(); [ -n "${RELAYBOT_EFFORT:-}" ] && effort_args=(-c "model_reasoning_effort=\"$RELAYBOT_EFFORT\"")
   opts=(${model_args[@]+"${model_args[@]}"} ${effort_args[@]+"${effort_args[@]}"} --skip-git-repo-check -o "$turn/reply.md" -)
+  if [ -n "${RELAYBOT_SANDBOX:-}" ]; then opts=(-c "sandbox_mode=$RELAYBOT_SANDBOX" "${opts[@]}"); fi
   # Keep the live log and scope the session header to this invocation.
   offset=$(wc -c < "$run/log.txt") || die "cannot read log size"
   if [ "$mode" = resume ]; then
@@ -158,7 +178,7 @@ if [ -s "$turn/reply.md" ]; then
   mv "$turn/reply.md" "$run/last.md" || die "cannot publish reply"
 fi
 if [ -f "$run/session" ]; then sid=$(cat "$run/session"); fi
-result=$("$PY" "$here/codex-relay-hook" --result "$rc" "$log_start") || die "cannot resolve turn status"
+result=$("$PY" "$here/codex-relay-hook" --result "$rc" "$log_start" "$bot" "$workdir") || die "cannot resolve turn status"
 st=${result%%$'\n'*}
 why=${result#*$'\n'}
 if [ "$st" = failed ] && [ "$rc" = 0 ]; then rc=1; fi

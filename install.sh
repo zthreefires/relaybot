@@ -13,6 +13,7 @@ mkdir -p "$prefix"
 for s in claude-run claude-stream-run codex-run codex-app-run codex-notify codex-relay-hook relaybot-doctor; do
   install -m 755 "$src/bin/$s" "$prefix/$s"
 done
+install -m 644 "$src/bin/claude_preference.py" "$prefix/claude_preference.py"
 mkdir -p "$home/webhooks"; chmod 700 "$home" "$home/webhooks"
 if [ ! -f "$home/config.env" ]; then
   install -m 600 "$src/config.example.env" "$home/config.env"

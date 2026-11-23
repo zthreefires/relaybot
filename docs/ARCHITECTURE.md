@@ -43,7 +43,7 @@ interactive threads only, so exec runs never appear there. codex-app-run talks t
 
 1. `initialize` with `clientInfo` (`RELAYBOT_CLIENT_NAME`) and `capabilities.experimentalApi`, then `initialized`.
 2. Page through `project/list` to find a matching real root, preferring a single-root project. If the workdir is the root of a linked Git worktree (`--git-dir` differs from `--git-common-dir`) and no project has that exact root, resolve the main worktree root (the parent of the common `.git`) and match on it with the same ranking, using the main folder name. At an unmatched Git worktree root, call `project/create` with the folder name, its canonical root and the stable idempotency key `relaybot:<real path>`; for a linked worktree these are the main root's name and path, never the worktree's. The thread cwd stays the workdir. Skip creation for default and fallback directories. On creation failure, log the error and look up the fallback project. With no project match, omit `projectId`.
-3. `thread/start` with `{cwd, approvalPolicy: "never", sandbox, threadSource: "user", projectId?, model?, config.model_reasoning_effort?}`.
+3. `thread/start` with `{cwd, threadSource: "user", projectId?, model?, sandbox?, config.model_reasoning_effort?}`.
    The server persists `projectId` for project-filtered queries. For a continuation, use `thread/resume` with the stored thread ID.
 4. `thread/name/set` to `[<bot>] <first line of task>`.
 5. `turn/start` with the prompt (and `effort` if configured).
@@ -84,9 +84,9 @@ The installed webview's `XyS0.ap` consumed the six thread/project snapshots and 
 
 `claude-run` selects the Claude backend by its executable name. It runs `claude -p` in the requested workdir with stream-json input/output and `--permission-prompt-tool stdio`. One user frame carries the UTF-8 task, preserving whitespace and line endings. The runner reads the session UUID from the CLI, saves it in `session`, and checks the UUID again on `--resume <uuid>`. The full reply comes from the terminal `result` frame. Codex model, effort, sandbox and desktop settings apply only to Codex.
 
-A tool approval, `AskUserQuestion`, or MCP elicitation delivered as a control request stops the CLI while the request is outstanding. Relaybot records the reason as `needs_auth`, grants no permission, and lets Claude flush its transcript on termination. Structured permission denials, deferred tool calls and explicit account/authentication errors can also produce `needs_auth`. If a stop precedes the final result, `reply` is empty and `reply_file` is null. An unsuccessful or missing result, unexpected session ID, timeout or unexpected exit produces `failed`. A question expressed only in the final text is delivered as a normal reply. See the [Claude Code approvals interface](https://code.claude.com/docs/en/agent-sdk/user-input) and [print-mode lifecycle](https://code.claude.com/docs/en/headless).
+A tool approval, `AskUserQuestion`, or MCP elicitation delivered as a control request stops the CLI while the request is outstanding. Relaybot offers the persistent choice for ordinary approvals identified by the CLI’s permission suggestions. Unclassified approvals, explicit ask rules, safety checks, connector interactions and denials remain reportable pauses. Relaybot records the reason as `needs_auth`, grants no permission, and lets Claude flush its transcript on termination. Structured permission denials, deferred tool calls and explicit account/authentication errors can also produce `needs_auth`. If a stop precedes the final result, `reply` is empty and `reply_file` is null. An unsuccessful or missing result, unexpected session ID, timeout or unexpected exit produces `failed`. A question expressed only in the final text is delivered as a normal reply. See the [Claude Code approvals interface](https://code.claude.com/docs/en/agent-sdk/user-input) and [print-mode lifecycle](https://code.claude.com/docs/en/headless).
 
-A follow-up uses the same workdir and `claude --resume <uuid>`. Both new and resumed turns pass `--dangerously-skip-permissions` by default. Set `RELAYBOT_CLAUDE_SKIP_PERMISSIONS=0` to omit the flag. If Claude requests interactive approval, the user can open that session locally to handle it.
+A follow-up uses the same workdir and `claude --resume <uuid>`. New and resumed turns inherit local permissions unless `RELAYBOT_CLAUDE_SKIP_PERMISSIONS=1`. A structured ordinary tool approval can trigger the [installation-wide choice](USAGE.md#claude-each-task). If Claude requests interactive approval, the user can open that session locally to handle it.
 
 ## Desktop live refresh (undocumented, best-effort)
 
@@ -152,6 +152,8 @@ Headers: `Content-Type: application/json`, `Authorization: Bearer <key>`, `X-Aut
 | `event` | `done`, `needs_auth`, `failed`, `test` (`blocked` only from older sessions, see above) |
 | `run_id`, `run_dir`, `workdir`, `ts` | the run directory's name and path, the agent's cwd, send time (unix seconds) |
 | `message` | short human text, at most 2000 chars: session command (`codex resume <id>` or `claude --resume <id>`), then for `done` the reply start; for `needs_auth` the request and any reply start; for `failed` the reason and the current turn's log tail |
+| `pause_kind` | For a structured Claude pause, the kind of request, such as `tool_approval`, `user_input`, `account` or `denial`. Older events may omit it. |
+| `permission_question_turn` | Candidate Claude turn ID. The bot claims the question locally before offering a persistent permission choice. |
 | `session_id` | Codex thread id or Claude session UUID, or `null` if none was created |
 | `exit_code` | the runner's exit code for this launch (`0` for `done`/`needs_auth`) |
 | `reply` | this turn's final agent message (`last.md`), first 8000 chars; `""` if there was none |

@@ -11,7 +11,7 @@ Requirements: macOS or Linux, `bash`, `python3` (3.8+), a signed-in CLI for each
    ./install.sh                 # or ./install.sh --prefix ~/.local/bin
    ```
 
-   This copies `claude-run`, `claude-stream-run`, `codex-run`, `codex-app-run`, `codex-notify`, `codex-relay-hook`, `relaybot-doctor`,
+   This copies `claude-run`, `claude-stream-run`, `claude_preference.py`, `codex-run`, `codex-app-run`, `codex-notify`, `codex-relay-hook`, `relaybot-doctor`,
    creates `~/.config/relaybot/` (mode 700) with `webhooks/`, and creates `config.env` from
    `config.example.env` if it does not exist.
 
@@ -36,10 +36,10 @@ Environment variables win over `config.env`. All keys are optional.
 | `RELAYBOT_HOME` | `~/.config/relaybot` | config dir: `config.env`, `webhooks/`, `outbox.jsonl` (env only) |
 | `RELAYBOT_CODEX_BIN` | desktop-bundled codex, else `codex` on PATH | Codex binary |
 | `RELAYBOT_CLAUDE_BIN` | `claude` on PATH, then `~/.local/bin/claude` | Claude Code binary with print mode, stream-json and stdio permission requests |
-| `RELAYBOT_CLAUDE_SKIP_PERMISSIONS` | `1` | Pass `--dangerously-skip-permissions` on each Claude turn. Set to `0` to use Claude's configured permissions. |
+| `RELAYBOT_CLAUDE_SKIP_PERMISSIONS` | unset | Inherit local permissions. A skippable tool approval can trigger a one-time choice for this installation. A saved `0` keeps local permissions and suppresses the question. A saved `1` adds `--dangerously-skip-permissions` on new and resumed turns. |
 | `RELAYBOT_MODEL` | Codex default | model |
 | `RELAYBOT_EFFORT` | Codex default | reasoning effort |
-| `RELAYBOT_SANDBOX` | `danger-full-access` | app-server sandbox mode |
+| `RELAYBOT_SANDBOX` | Codex configuration | optional Codex sandbox override |
 | `RELAYBOT_DEFAULT_WORKDIR` | `~/Documents/relaybot` | workdir for tasks tied to no project (`codex-run <bot> - ...`) |
 | `RELAYBOT_PROJECT_FALLBACK_ROOT` | configured default workdir, else existing codex-for-grok or default project | desktop project root used when no project matches |
 | `RELAYBOT_REPOS_ROOT` | `~/Developer` | where existing clones live (`<root>/<repo>`); read by the `codex` skill |

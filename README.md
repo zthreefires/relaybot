@@ -57,7 +57,7 @@ The rest of this file is for the agent that installs or dispatches relaybot. Fol
 Both runners pass the task text verbatim and use the same `done`, `needs_auth` and `failed` events. The webhook carries the session ID, exit code and up to 8000 characters of the final reply, with a path to the full reply when present.
 
 - **Codex** selects an app-server project by Git root. For an isolated task, `codex-run <bot> "<main-repo>" /tmp/task.md --worktree "<branch>"` opens the branch under Codex's managed worktree directory. The desktop groups the thread with the main project, and follow-ups use the same checkout after an app-server restart. These runs require the app-server. Ordinary runs retain the `codex exec` fallback. [Worktree usage](docs/USAGE.md#isolated-codex-tasks)
-- **Claude Code** runs the local `claude -p` CLI with `--dangerously-skip-permissions` by default on new and resumed tasks. Set `RELAYBOT_CLAUDE_SKIP_PERMISSIONS=0` to use Claude’s configured permissions. A tool approval or structured question stops the run with `needs_auth`. The bot can send your follow-up to the same session, or you can open it in the workdir with `claude --resume <id>` to handle an interactive approval. A question written only in the final reply comes back as `done` for the bot to relay.
+- **Claude Code** runs the local `claude -p` CLI with its local permission settings. When a tool needs ordinary approval, the bot can ask whether future relaybot turns should use `--dangerously-skip-permissions`. It remembers your answer for this installation. A tool approval or structured question stops the run with `needs_auth`. The bot can send your follow-up to the same session, or you can open it in the workdir with `claude --resume <id>` to handle an interactive approval. A question written only in the final reply comes back as `done` for the bot to relay.
 
 Flow, run directory, and event contract: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -83,7 +83,7 @@ git clone https://github.com/zthreefires/relaybot.git ~/relaybot 2>/dev/null || 
 
 If `git clone` fails because the repository is private, clone with an authenticated `gh repo clone zthreefires/relaybot ~/relaybot` instead, then run `install.sh`.
 
-This copies `claude-run`, `claude-stream-run`, `codex-run`, `codex-app-run`, `codex-notify`, `codex-relay-hook`, and `relaybot-doctor` to the prefix (default `~/bin`), creates `~/.config/relaybot/` and `webhooks/` with mode 700, and copies [config.example.env](config.example.env) to `~/.config/relaybot/config.env` only if that file does not exist.
+This copies `claude-run`, `claude-stream-run`, `claude_preference.py`, `codex-run`, `codex-app-run`, `codex-notify`, `codex-relay-hook`, and `relaybot-doctor` to the prefix (default `~/bin`), creates `~/.config/relaybot/` and `webhooks/` with mode 700, and copies [config.example.env](config.example.env) to `~/.config/relaybot/config.env` only if that file does not exist.
 
 Then:
 
@@ -154,6 +154,7 @@ Ask the user only for things you cannot do yourself:
 
 - Install or sign in to each pending CLI when needed.
 - Config values they care about (`RELAYBOT_REPOS_ROOT`, `RELAYBOT_DEFAULT_WORKDIR`, model and effort).
+- Whether future Claude turns should skip tool approval, when a blocked task offers the installation-wide choice.
 - Pasting the selected routine's webhook URL and providing the key through a secret request.
 - Creating a Codex desktop project for the default or fallback workdir, if they want those runs filed in the desktop app.
 - Permission to create a webhook routine, if this bot's instructions forbid routines, webhooks, or proactive messages.
@@ -164,7 +165,7 @@ Ask the user only for things you cannot do yourself:
 
 - Never print, echo, or paste a webhook key (chat, logs, memory, routine prompt, commit).
 - Keep `~/.config/relaybot/` and `webhooks/` at mode 700, and each `<slug>.json` at mode 600. Never commit those files.
-- Do not edit the live scripts in the install prefix, or `config.env`, while a run is in progress.
+- Avoid manual edits to installed scripts and `config.env` while a run is in progress. The permission-choice command saves its setting under a lock.
 - `install.sh` may update the prefix scripts. If either runner is active, wait until it finishes.
 - Never add `--dangerously-bypass-approvals-and-sandbox`. Keep the user's other Codex config as it is.
 - Confirm the selected agent's work in `last.md` or the log before reporting it as complete.

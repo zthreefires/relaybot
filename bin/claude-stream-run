@@ -20,9 +20,9 @@ def permission_reason(tool, args):
     return f"Claude Code needs permission for {tool}" + (f": {detail}" if detail else ".")
 
 
-def pause(reason):
+def pause(reason, kind):
     helper = Path(__file__).with_name("codex-relay-hook")
-    subprocess.run([sys.executable, str(helper), "--request", "needs_auth", reason[:500]], check=True)
+    subprocess.run([sys.executable, str(helper), "--request", "needs_auth", reason[:500], kind], check=True)
     return 0
 
 
@@ -47,17 +47,34 @@ def finish(result, turn, rc, account_error):
         if result.get("startup_failure_reason") == "gateway_signin_required":
             account_error = "gateway_signin_required"
         if account_error or result.get("api_error_status") in (401, 402):
-            return pause("Claude Code needs account attention: " + str(account_error or result["api_error_status"]))
+            return pause("Claude Code needs account attention: " + str(account_error or result["api_error_status"]), "account")
     if rc or result["subtype"] != "success" or result["is_error"] is not False:
         print("Claude Code result:", result["subtype"], "exit:", rc)
         return rc or 1
     denials = result.get("permission_denials") or []
     if denials:
-        return pause(permission_reason(denials[0]["tool_name"], denials[0].get("tool_input", {})))
+        return pause(permission_reason(denials[0]["tool_name"], denials[0].get("tool_input", {})), "denial")
     deferred = result.get("deferred_tool_use")
     if deferred:
-        return pause(permission_reason(deferred["name"], deferred["input"]))
+        return pause(permission_reason(deferred["name"], deferred["input"]), "deferred")
     return 0
+
+
+def approval_kind(request, mode):
+    tool = request["tool_name"]
+    if tool in ("AskUserQuestion", "ExitPlanMode", "EnterPlanMode"):
+        return "user_input"
+    # An explicit ask rule or safety check can require confirmation even in bypass mode.
+    # Offer only for ordinary approvals where Claude suggests granting tool access.
+    if (mode in ("default", "manual", "acceptEdits", "auto")
+            and not tool.startswith("mcp__")
+            and not any(request.get(k) for k in ("matched_ask_rule", "decision_reason", "decision_reason_type",
+                                                 "default_to_no", "suppress_always_allow_rule"))
+            and any((s.get("type") == "addRules" and s.get("behavior") == "allow")
+                    or (s.get("type") == "setMode" and s.get("mode") == "acceptEdits")
+                    for s in request.get("permission_suggestions") or [])):
+        return "tool_approval"
+    return "other_approval"
 
 
 def read_turn(proc, run, turn, sid):
@@ -68,6 +85,7 @@ def read_turn(proc, run, turn, sid):
     proc.stdin.flush()
     result = None
     account_error = None
+    mode = None
     for line in proc.stdout:
         if result is not None:
             # Drain shutdown output before wait() so a full pipe cannot block the CLI.
@@ -82,22 +100,24 @@ def read_turn(proc, run, turn, sid):
                 sid = reported
                 (run / "session").write_text(sid + "\n")
                 print("session id:", sid, flush=True)
-            if (kind, subtype) == ("system", "init") and frame.get("permissionMode"):
-                print(f"{turn.name} permissionMode: {frame['permissionMode']}", flush=True)
+            if (kind, subtype) == ("system", "init"):
+                mode = frame.get("permissionMode")
+                if mode:
+                    print(f"{turn.name} permissionMode: {mode}", flush=True)
 
         # End the child while the request is outstanding. It cannot run the tool
         # or try an alternative after a denial. SIGTERM lets Claude flush its session.
         if kind == "control_request":
             request = frame["request"]
             if request["subtype"] == "can_use_tool":
-                return pause(permission_reason(request["tool_name"], request["input"]))
+                return pause(permission_reason(request["tool_name"], request["input"]), approval_kind(request, mode))
             if request["subtype"] == "elicitation":
-                return pause("Claude Code needs user input: " + request["message"])
+                return pause("Claude Code needs user input: " + request["message"], "user_input")
             if request["subtype"] == "request_user_dialog":
-                return pause("Claude Code needs user input: " + request["dialog_kind"])
+                return pause("Claude Code needs user input: " + request["dialog_kind"], "user_input")
             raise ValueError("unsupported Claude control request")
         if (kind, subtype) == ("system", "permission_denied"):
-            return pause(permission_reason(frame["tool_name"], {}) + " " + frame.get("message", ""))
+            return pause(permission_reason(frame["tool_name"], {}) + " " + frame.get("message", ""), "denial")
         if kind == "assistant" and frame.get("error") in ("authentication_failed", "billing_error",
                                                           "oauth_org_not_allowed", "account_on_hold"):
             account_error = frame["error"]
@@ -123,7 +143,7 @@ def main():
     binary, cwd, sid = sys.argv[1:]
     args = [binary, "-p", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json",
             "--permission-prompt-tool", "stdio"]
-    if (os.environ.get("RELAYBOT_CLAUDE_SKIP_PERMISSIONS") or "1") == "1":
+    if os.environ.get("RELAYBOT_CLAUDE_SKIP_PERMISSIONS") == "1":
         args.append("--dangerously-skip-permissions")
     if sid:
         args.extend(["--resume", sid])

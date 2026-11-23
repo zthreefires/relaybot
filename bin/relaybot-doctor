@@ -18,7 +18,7 @@ for s in claude-run claude-stream-run codex-run codex-app-run codex-notify codex
   if [ -x "$here/$s" ]; then pass "script: $here/$s"; else fail "missing or not executable: $here/$s"; fi
 done
 bash -n "$here/codex-run" 2>/dev/null && pass "codex-run parses" || fail "codex-run has a syntax error"
-for s in claude-stream-run codex-app-run codex-notify codex-relay-hook; do
+for s in claude-stream-run claude_preference.py codex-app-run codex-notify codex-relay-hook; do
   "$PY" -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$here/$s" 2>/dev/null && pass "$s parses" || fail "$s has a syntax error"
 done
 

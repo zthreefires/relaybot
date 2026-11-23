@@ -78,6 +78,12 @@ def main():
         except FileNotFoundError:
             reply = ""
         data = result(turn, rc, reply)
+        if (data.get("pause_kind") == "tool_approval" and run.name.startswith("claude-run-")
+                and not os.environ.get("RELAYBOT_CLAUDE_SKIP_PERMISSIONS") and len(sys.argv) == 6
+                and (run / "session").is_file()):
+            from claude_preference import binding
+            data["permission_question"] = binding(sys.argv[4], run, turn.name, sys.argv[5],
+                                                  (run / "session").read_text().strip())
         store(run / "status.json", data)
         print(data["status"])
         if data["status"] != "done":
@@ -89,8 +95,11 @@ def main():
         elif reply.strip():
             print(reply.strip()[:1500])
         return
-    if sys.argv[1:2] == ["--request"] and len(sys.argv) == 4 and sys.argv[2] in PAUSES:
-        store(turn / "pending.json", record(turn, sys.argv[2], sys.argv[3], "request"), first=True)
+    if sys.argv[1:2] == ["--request"] and len(sys.argv) in (4, 5) and sys.argv[2] in PAUSES:
+        data = record(turn, sys.argv[2], sys.argv[3], "request")
+        if len(sys.argv) == 5:
+            data["pause_kind"] = sys.argv[4]
+        store(turn / "pending.json", data, first=True)
         return
     sys.exit(__doc__)
 
