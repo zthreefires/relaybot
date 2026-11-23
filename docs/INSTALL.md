@@ -36,6 +36,7 @@ Environment variables win over `config.env`. All keys are optional.
 | `RELAYBOT_HOME` | `~/.config/relaybot` | config dir: `config.env`, `webhooks/`, `outbox.jsonl` (env only) |
 | `RELAYBOT_CODEX_BIN` | desktop-bundled codex, else `codex` on PATH | Codex binary |
 | `RELAYBOT_CLAUDE_BIN` | `claude` on PATH, then `~/.local/bin/claude` | Claude Code binary with print mode, stream-json and stdio permission requests |
+| `RELAYBOT_CLAUDE_SKIP_PERMISSIONS` | `1` | Pass `--dangerously-skip-permissions` on each Claude turn. Set to `0` to use Claude's configured permissions. |
 | `RELAYBOT_MODEL` | Codex default | model |
 | `RELAYBOT_EFFORT` | Codex default | reasoning effort |
 | `RELAYBOT_SANDBOX` | `danger-full-access` | app-server sandbox mode |

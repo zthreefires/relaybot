@@ -86,7 +86,7 @@ The installed webview's `XyS0.ap` consumed the six thread/project snapshots and 
 
 A tool approval, `AskUserQuestion`, or MCP elicitation delivered as a control request stops the CLI while the request is outstanding. Relaybot records the reason as `needs_auth`, grants no permission, and lets Claude flush its transcript on termination. Structured permission denials, deferred tool calls and explicit account/authentication errors can also produce `needs_auth`. If a stop precedes the final result, `reply` is empty and `reply_file` is null. An unsuccessful or missing result, unexpected session ID, timeout or unexpected exit produces `failed`. A question expressed only in the final text is delivered as a normal reply. See the [Claude Code approvals interface](https://code.claude.com/docs/en/agent-sdk/user-input) and [print-mode lifecycle](https://code.claude.com/docs/en/headless).
 
-A follow-up uses the same workdir and `claude --resume <uuid>`. The user's existing Claude permissions still apply. If an interactive approval is required again, the user can open that session locally to handle it. Relaybot supplies no hooks or permission overrides.
+A follow-up uses the same workdir and `claude --resume <uuid>`. Both new and resumed turns pass `--dangerously-skip-permissions` by default. Set `RELAYBOT_CLAUDE_SKIP_PERMISSIONS=0` to omit the flag. If Claude requests interactive approval, the user can open that session locally to handle it.
 
 ## Desktop live refresh (undocumented, best-effort)
 

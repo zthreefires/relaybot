@@ -148,14 +148,14 @@ class Runs(unittest.TestCase):
             self.assertEqual((self.payload['exit_code'], self.payload['reply'], self.payload['reply_file']),
                              (0, '', None))
             self.assertEqual((run / 'prompt.md').read_bytes(), self.task.read_bytes())
-            self.assertEqual(self.records()[-1], dict(cwd=str(self.work), resume=None,
+            self.assertEqual(self.records()[-1], dict(cwd=str(self.work), resume=None, skip_permissions=True,
                                                       input=self.task.read_bytes().decode()))
             follow = run / 'followup.md'
             follow.write_text('  继续')
             self.reject(self.launch(task=follow, resume=True))
             reply = '好' * 8001
             self.assertEqual(self.finish(self.launch('claude', task=follow, resume=True, reply=reply), 'done'), run)
-            self.assertEqual(self.records()[-1], dict(cwd=str(self.work), resume=sid, input='  继续'))
+            self.assertEqual(self.records()[-1], dict(cwd=str(self.work), resume=sid, skip_permissions=True, input='  继续'))
             self.assertEqual(self.payload['session_id'], sid)
             self.assertEqual(self.payload['reply'], reply[:8000])
             self.assertTrue(self.payload['reply_truncated'])
@@ -166,6 +166,11 @@ class Runs(unittest.TestCase):
             self.assertEqual(len((run / 'notified.jsonl').read_text().splitlines()), 3)
             (run / 'session').write_text('latest')
             self.reject(self.launch('claude', task=follow, resume=True))
+
+    def test_claude_permission_opt_out(self):
+        (self.home / 'config.env').write_text('RELAYBOT_CLAUDE_SKIP_PERMISSIONS=0\n')
+        self.finish(self.launch('claude', case='permission'), 'needs_auth')
+        self.assertFalse(self.records()[-1]['skip_permissions'])
 
     def test_claude_results(self):
         for cfg, status, rc in [

@@ -57,7 +57,7 @@
 两个入口都会原样传入任务正文，共用 `done`、`needs_auth`、`failed` 事件。webhook 带会话 ID、退出码和最多 8000 个字符的最终回复。有回复时也会给出全文的本机路径。
 
 - **Codex** 按 Git 根目录选择 app-server 项目。任务需要隔离时，用 `codex-run <bot> "<主仓库>" /tmp/task.md --worktree "<分支>"` 在 Codex 托管目录下检出分支。桌面侧栏将会话归入主仓库项目，重启 app-server 后续接也在同一工作树中执行。隔离任务需要 app-server，普通任务保留 `codex exec` 回退。[工作树用法](docs/USAGE.md#isolated-codex-tasks)
-- **Claude Code** 通过本机 `claude -p` 运行。收到工具授权请求或结构化提问时，以 `needs_auth` 停下。bot 可以把你的答复送回原会话。如果需要在终端交互授权，可在原工作目录运行 `claude --resume <id>`。relaybot 不添加 hook 或放宽权限的参数。只写在最终回复里的问题以 `done` 回传，由 bot 转述。
+- **Claude Code** 通过本机 `claude -p` 运行。新任务和续接任务默认带上 `--dangerously-skip-permissions`，跳过常规工具权限确认。设置 `RELAYBOT_CLAUDE_SKIP_PERMISSIONS=0` 可使用 Claude 自身的权限配置。收到工具授权请求或结构化提问时，以 `needs_auth` 停下。bot 可以把你的答复送回原会话。如果需要在终端交互授权，可在原工作目录运行 `claude --resume <id>`。只写在最终回复里的问题以 `done` 回传，由 bot 转述。
 
 流程、运行目录和事件约定见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 

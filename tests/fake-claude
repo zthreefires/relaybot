@@ -27,13 +27,14 @@ parser.add_argument("--verbose", action="store_true", required=True)
 parser.add_argument("--input-format", choices=["stream-json"], required=True)
 parser.add_argument("--output-format", choices=["stream-json"], required=True)
 parser.add_argument("--permission-prompt-tool", choices=["stdio"], required=True)
+parser.add_argument("--dangerously-skip-permissions", action="store_true")
 parser.add_argument("--resume", type=uuid.UUID)
 args = parser.parse_args()
 sid = cfg.get("sid") or str(args.resume or uuid.uuid4())
 user = json.loads(sys.stdin.buffer.readline())
 assert user["type"] == "user" and user["message"]["role"] == "user"
 with Path(os.environ["TRACE"]).open("a") as trace:
-    print(json.dumps(dict(input=user["message"]["content"], cwd=os.getcwd(),
+    print(json.dumps(dict(input=user["message"]["content"], cwd=os.getcwd(), skip_permissions=args.dangerously_skip_permissions,
                           resume=str(args.resume) if args.resume else None)), file=trace)
 emit("system", subtype="init", session_id=sid)
 case = cfg.get("case")
