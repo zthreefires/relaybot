@@ -83,7 +83,7 @@ git clone https://github.com/zthreefires/relaybot.git ~/relaybot 2>/dev/null || 
 
 If `git clone` fails because the repository is private, clone with an authenticated `gh repo clone zthreefires/relaybot ~/relaybot` instead, then run `install.sh`.
 
-This copies `claude-run`, `claude-stream-run`, `claude_preference.py`, `codex-run`, `codex-app-run`, `codex-notify`, `codex-relay-hook`, and `relaybot-doctor` to the prefix (default `~/bin`), creates `~/.config/relaybot/` and `webhooks/` with mode 700, and copies [config.example.env](config.example.env) to `~/.config/relaybot/config.env` only if that file does not exist.
+This copies `claude-run`, `claude-stream-run`, `claude_preference.py`, `desktop_handoff.py`, `codex-run`, `codex-app-run`, `codex-notify`, `codex-relay-hook`, and `relaybot-doctor` to the prefix (default `~/bin`), creates `~/.config/relaybot/` and `webhooks/` with mode 700, and copies [config.example.env](config.example.env) to `~/.config/relaybot/config.env` only if that file does not exist.
 
 Then:
 
@@ -127,6 +127,7 @@ Use `/codex` or `/claude` and follow [`skills/codex/SKILL.md`](skills/codex/SKIL
 /relaybot-setup                  # once per bot; safe to re-run
 /codex <what the user wants done>
 /claude <what the user wants done>
+-handoff                         # open this task in its desktop app
 ```
 
 1. Write the task and relevant context to a UTF-8 file on the user's computer. Use the folder the user named or verify the existing clone under `RELAYBOT_REPOS_ROOT`. Ask if the project is unclear. Use `-` for a task tied to no project.

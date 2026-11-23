@@ -1,6 +1,6 @@
 # relaybot
 
-> Dispatch Codex or Claude Code from a chat bot or personal agent such as Grok Bot: run the chosen CLI on your own computer, get a webhook callback when the coding agent finishes, fails, or needs approval, and resume the same session afterwards. Codex app-server threads appear in the desktop. Claude Code sessions can be opened with `claude --resume <id>`.
+> Dispatch Codex or Claude Code from a chat bot or personal agent such as Grok Bot: run the chosen CLI on your own computer, get a webhook callback when the coding agent finishes, fails, or needs approval, and resume the same session afterwards. Codex app-server threads appear in the desktop. Users can send `-handoff` to open the current Codex or Claude session on their desktop.
 
 The personal agent keeps the context and writes the full prompt; the user picks the coding agent explicitly; tasks use the selected CLI’s local account; sessions are managed for them.
 

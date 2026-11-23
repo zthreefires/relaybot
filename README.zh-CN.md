@@ -83,7 +83,7 @@ git clone https://github.com/zthreefires/relaybot.git ~/relaybot 2>/dev/null || 
 
 如果因为仓库是私有的，`git clone` 失败，改用已登录的 `gh repo clone zthreefires/relaybot ~/relaybot`，再运行 `install.sh`。
 
-这会把 `claude-run`、`claude-stream-run`、`claude_preference.py`、`codex-run`、`codex-app-run`、`codex-notify`、`codex-relay-hook`、`relaybot-doctor` 复制到前缀目录（默认 `~/bin`），创建权限为 700 的 `~/.config/relaybot/` 和 `webhooks/`，并只在 `~/.config/relaybot/config.env` 还不存在时，从 [config.example.env](config.example.env) 复制一份。
+这会把 `claude-run`、`claude-stream-run`、`claude_preference.py`、`desktop_handoff.py`、`codex-run`、`codex-app-run`、`codex-notify`、`codex-relay-hook`、`relaybot-doctor` 复制到前缀目录（默认 `~/bin`），创建权限为 700 的 `~/.config/relaybot/` 和 `webhooks/`，并只在 `~/.config/relaybot/config.env` 还不存在时，从 [config.example.env](config.example.env) 复制一份。
 
 然后：
 
@@ -127,6 +127,7 @@ git clone https://github.com/zthreefires/relaybot.git ~/relaybot 2>/dev/null || 
 /relaybot-setup                  # 每个 bot 一次；可重复执行
 /codex <使用者要做的事>
 /claude <使用者要做的事>
+-handoff                         # 在对应的桌面端打开当前任务
 ```
 
 1. 把任务和相关上下文写入使用者电脑上的 UTF-8 文件。用使用者指定的目录，或确认 `RELAYBOT_REPOS_ROOT` 下已有对应 clone。判断不了项目时先询问。只有与已有项目无关的任务才传 `-`。

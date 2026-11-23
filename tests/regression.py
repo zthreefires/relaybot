@@ -1,9 +1,11 @@
 """Black-box regression tests for the repository or an installed prefix."""
+import fcntl
 import http.server
 import json
 import os
 from pathlib import Path
 import re
+import select
 import subprocess
 import sys
 import tempfile
@@ -142,8 +144,8 @@ class Runs(unittest.TestCase):
             self.assertTrue(run.name.startswith('claude-run-'))
             self.assertEqual(run.stat().st_mode & 0o777, 0o700)
             sid = self.payload['session_id']
-            self.assertIn('claude --resume ' + sid, self.message)
-            self.assertEqual('claude --desktop --resume ' + sid in self.message, sys.platform == 'darwin')
+            self.assertNotIn('claude --resume', self.message)
+            self.assertNotIn('claude --desktop', self.message)
             self.assertIn(reason, self.message)
             self.assertEqual((self.payload['exit_code'], self.payload['reply'], self.payload['reply_file']),
                              (0, '', None))
@@ -174,6 +176,62 @@ class Runs(unittest.TestCase):
         turn = (run / 'pause').read_text().strip()
         self.assertIn(f'{turn} permissionMode: plan', (run / 'log.txt').read_text())
         self.assertNotIn('permission_question_turn', self.payload)
+
+    def handoff(self, agent, run, workdir, **cfg):
+        return subprocess.Popen([BIN / (agent + '-run'), '-handoff', run, workdir],
+                                env=dict(self.env, FIXTURE=json.dumps(cfg)), stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def test_claude_desktop_handoff(self):
+        workdir = self.root / 'project with spaces'
+        run = self.finish(self.launch('claude', work=workdir), 'done')
+        sid = self.payload['session_id']
+        self.assertEqual(self.payload['message'], DONE)
+        self.assertFalse(any('desktop' in r for r in self.records()))
+        # Simulate the same directory lock used by an active relaybot turn.
+        fd = os.open(run, os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            proc = self.handoff('claude', run, workdir)
+            self.assertTrue(select.select([proc.stdout], [], [], 5)[0])
+            self.assertIn('Waiting', proc.stdout.readline())
+            self.assertFalse(any('desktop' in r for r in self.records()))
+        finally:
+            os.close(fd)
+        out, err = proc.communicate(timeout=5)
+        self.assertEqual(proc.returncode, 0, out + err)
+        self.assertEqual(self.records()[-1], dict(desktop=sid, cwd=str(workdir)))
+        self.assertEqual(self.server.calls, [])
+        self.reject(self.handoff('claude', run, workdir, desktop_exit=1))
+
+    def test_codex_desktop_handoff(self):
+        opener = self.root / ('open' if sys.platform == 'darwin' else 'xdg-open')
+        opener.write_text('#!/usr/bin/env python3\nimport json, os, sys\n'
+                          'with open(os.environ["TRACE"], "a") as f: print(json.dumps({"open": sys.argv[1:]}), file=f)\n')
+        opener.chmod(0o755)
+        self.env['PATH'] = str(self.root) + os.pathsep + self.env['PATH']
+        run = self.finish(self.launch('app'), 'done')
+        sid = self.payload['session_id']
+        opened = dict(open=['codex://threads/' + sid])
+        self.assertNotIn(opened, self.records())
+        fd = os.open(run, os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            (run / 'session').unlink()
+            proc = self.handoff('codex', run, self.work)
+            (run / 'session').write_text(sid + '\n')
+            out, err = proc.communicate(timeout=5)
+        finally:
+            os.close(fd)
+        self.assertEqual(proc.returncode, 0, out + err)
+        self.assertIn(opened, self.records())
+        self.reject(self.handoff('claude', run, self.work))
+        (run / 'session').write_text('../other')
+        self.reject(self.handoff('codex', run, self.work))
+        (run / 'session').unlink()
+        self.reject(self.handoff('codex', run, self.work))
+        self.assertEqual(sum('open' in r for r in self.records()), 1)
+        self.assertEqual(self.server.calls, [])
 
     def permission_choice(self, run, turn, choice, bot='test', cwd=None, task=None):
         return subprocess.Popen([BIN / 'claude-run', bot, cwd or self.work, task or run / 'task.md',

@@ -23,7 +23,7 @@ The bot:
    Wait for the run to finish before writing to it.
 
 When the turn ends, one event comes back and the bot reads Codex's final reply: it reports what Codex
-did, or relays the question Codex asked or what is blocking it, and includes `codex resume <id>`. If the
+did, or relays the question Codex asked or what is blocking it. If the
 app-server asked for an approval or your input during the turn (`needs_auth`), the bot tells you what
 was needed. The bot records the full `run_dir` and session ID in chat after each launch. Answers, review
 fixes, extra tests and later changes to the same task in the same workdir resume its session by default.
@@ -39,7 +39,11 @@ the desktop by hand.
 
 Use the same bot, webhook and workdir selection as for `/codex`. The bot starts `claude-run`. Claude Code runs in CLI print mode with its local permission settings. When an ordinary tool approval blocks the task, the bot reports the operation and offers a choice for every Claude task using this relaybot installation. Choose **Yes, skip future prompts and continue** to save `RELAYBOT_CLAUDE_SKIP_PERMISSIONS=1` and resume this task once in the same session. Choose **No, keep local permissions** to save `0` and leave this task paused. Later approval requests still reach the bot. While the question is unanswered, new tasks continue with local permissions. You can change the key later in `config.env`. An approval or structured question produces `needs_auth` and the bot relays the request. After you respond, it passes your text to a new turn in that session. If the tool still needs interactive approval, open `claude --resume <id>` in the original directory. A question in ordinary reply text can arrive as `done`. The bot reads it and waits for your answer.
 
-On macOS, the webhook also includes `claude --desktop --resume <session_id>`. Run it in a terminal in the original workdir when you want to open the conversation in Claude Desktop’s Code tab. Until then, the session stays in CLI history. The command requires Claude Desktop and Claude Code 2.1.285 or later signed in with a Claude subscription. [Claude Desktop session handoff](https://code.claude.com/docs/en/desktop#desktop-vs-cli)
+## Open the current task on desktop
+
+Send `-handoff` in the bot chat. The bot opens the Codex thread or the Claude Desktop Code session for the task you are discussing. With multiple possible tasks, reply to the result you want. Regular results carry the session ID as metadata and open the desktop only on your request.
+
+The local command is `<runner> -handoff "<run_dir>" "<workdir>"`, using the runner that created the task. Codex opens its thread link. Claude waits for the relaybot turn to exit, then runs `claude --desktop --resume <session_id>` in the original workdir. If an interactive Claude terminal still owns the session, use `/desktop` there. On macOS, Claude handoff requires Claude Desktop and Claude Code 2.1.285 or later signed in with a Claude subscription. [Claude Desktop session handoff](https://code.claude.com/docs/en/desktop#desktop-vs-cli)
 
 ## Running the scripts by hand
 
@@ -61,7 +65,7 @@ If a sibling worktree's thread is missing from the desktop project, open `codex:
 
 Resume snapshots `followup.md` and requires the original ID in `session`. If the ID is missing, recover it from the original log before retrying. Report any failure. If the desktop holds the thread, ask the user to close it and retry the same ID. A replacement session requires the user's approval. An unreadable input or busy run leaves the prior turn usable. During a valid resume, `last.md` can be absent until a fresh reply is published.
 
-The last output line is `run_dir=... exit=... session=... status=...`, with status `done`, `needs_auth` or `failed`. `done` and `needs_auth` return 0. A runner failure keeps its nonzero exit code; a clean exit with no final reply is `failed` with exit 1. The webhook event carries the same status plus the reply; see [the event contract](ARCHITECTURE.md#webhook-events).
+The runner prints `started run_dir=...` before dispatch so the bot can identify an active task for handoff. The last output line is `run_dir=... exit=... session=... status=...`, with status `done`, `needs_auth` or `failed`. `done` and `needs_auth` return 0. A runner failure keeps its nonzero exit code; a clean exit with no final reply is `failed` with exit 1. The webhook event carries the same status plus the reply; see [the event contract](ARCHITECTURE.md#webhook-events).
 
 Configure the final webhook URL directly. The receiver must return 2xx. A redirect or delivery error queues the event in `outbox.jsonl`. Check the queue for delivery issues before considering another task launch.
 

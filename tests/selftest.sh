@@ -73,7 +73,7 @@ assert [e["event"] for e in ev] == ["done", "needs_auth", "done", "test"], [e["e
 for e in ev:
     assert e["_auth_ok"], "auth headers"
     assert set(e) >= {"event", "run_id", "run_dir", "workdir", "message", "ts"}
-assert "codex resume 00000000-test-session" in ev[0]["message"]
+assert ev[0]["message"] == ev[0]["reply"]
 assert "2FA" in ev[1]["message"]
 for e in ev[:3]:
     assert set(e) >= {"session_id", "exit_code", "reply", "reply_truncated", "reply_file"}, e

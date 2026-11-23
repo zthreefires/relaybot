@@ -46,6 +46,14 @@ if [ $# -eq 1 ] && [ "$1" = "--login-status" ]; then
   if [ "$agent" = claude ]; then exec "$binary" auth status --json; fi
   exec "$binary" login status
 fi
+PY=${RELAYBOT_PYTHON:-$(command -v python3 || echo /usr/bin/python3)}
+RUN_ROOT=${RELAYBOT_RUN_ROOT:-/tmp}
+if [ "${1:-}" = -handoff ]; then
+  [ $# -eq 3 ] || { echo "usage: $runner -handoff <run_dir> <workdir|->" >&2; exit 2; }
+  workdir=$3
+  if [ -z "$workdir" ] || [ "$workdir" = - ]; then workdir=${RELAYBOT_DEFAULT_WORKDIR:-$HOME/Documents/relaybot}; fi
+  exec "$PY" "$here/desktop_handoff.py" "$agent" "$binary" "$RUN_ROOT" "$2" "$workdir"
+fi
 mode=${4:-}
 choice=""
 usage() {
@@ -66,8 +74,6 @@ case "$#:$mode" in
 esac
 bot=$1; workdir=$2; task=$3
 shift 3
-PY=${RELAYBOT_PYTHON:-$(command -v python3 || echo /usr/bin/python3)}
-RUN_ROOT=${RELAYBOT_RUN_ROOT:-/tmp}
 
 # "-" (or empty) means the default workdir for tasks tied to no existing project.
 if [ -z "$workdir" ] || [ "$workdir" = - ]; then workdir=${RELAYBOT_DEFAULT_WORKDIR:-$HOME/Documents/relaybot}; fi
@@ -141,6 +147,7 @@ rm -f "$run/status.json" "$run/exit" || die "cannot clear previous result"
 
 : >> "$run/log.txt" || die "cannot open run log"
 log_start=$(wc -c < "$run/log.txt") || die "cannot read log size"
+echo "started run_dir=$run"
 rc=97
 if [ "$agent" = claude ]; then
   "$PY" "$here/claude-stream-run" "$binary" "$workdir" "$sid" >> "$run/log.txt" 2>&1

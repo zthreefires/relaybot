@@ -139,7 +139,7 @@ in `$RELAYBOT_HOME/webhooks/<bot>.json`:
 ```json
 {"event": "done", "run_id": "codex-run-AbC123xy", "run_dir": "/tmp/codex-run-AbC123xy",
  "workdir": "/path/to/repo", "ts": 1767240000,
- "message": "View session: codex resume <id>\n<first 1500 chars of the reply>",
+ "message": "<first 1500 chars of the reply>",
  "session_id": "<thread id>", "exit_code": 0,
  "reply": "<final reply, up to 8000 chars>", "reply_truncated": false,
  "reply_file": "/tmp/codex-run-AbC123xy/last.md"}
@@ -151,7 +151,7 @@ Headers: `Content-Type: application/json`, `Authorization: Bearer <key>`, `X-Aut
 |---|---|
 | `event` | `done`, `needs_auth`, `failed`, `test` (`blocked` only from older sessions, see above) |
 | `run_id`, `run_dir`, `workdir`, `ts` | the run directory's name and path, the agent's cwd, send time (unix seconds) |
-| `message` | short human text, at most 2000 chars: session command (`codex resume <id>` or `claude --resume <id>`), then for `done` the reply start; for `needs_auth` the request and any reply start; for `failed` the reason and the current turn's log tail |
+| `message` | Up to 2000 characters. For `done`, the reply start. For `needs_auth`, the request and any reply start. For `failed`, the reason and the current turn's log tail. |
 | `pause_kind` | For a structured Claude pause, the kind of request, such as `tool_approval`, `user_input`, `account` or `denial`. Older events may omit it. |
 | `permission_question_turn` | Candidate Claude turn ID. The bot claims the question locally before offering a persistent permission choice. |
 | `session_id` | Codex thread id or Claude session UUID, or `null` if none was created |

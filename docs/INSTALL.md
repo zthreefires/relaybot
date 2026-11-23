@@ -11,7 +11,7 @@ Requirements: macOS or Linux, `bash`, `python3` (3.8+), a signed-in CLI for each
    ./install.sh                 # or ./install.sh --prefix ~/.local/bin
    ```
 
-   This copies `claude-run`, `claude-stream-run`, `claude_preference.py`, `codex-run`, `codex-app-run`, `codex-notify`, `codex-relay-hook`, `relaybot-doctor`,
+   This copies `claude-run`, `claude-stream-run`, `claude_preference.py`, `desktop_handoff.py`, `codex-run`, `codex-app-run`, `codex-notify`, `codex-relay-hook`, `relaybot-doctor`,
    creates `~/.config/relaybot/` (mode 700) with `webhooks/`, and creates `config.env` from
    `config.example.env` if it does not exist.
 
