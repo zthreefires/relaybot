@@ -3,11 +3,12 @@ name: codex
 description: >-
   Dispatch /codex or /claude tasks locally, report relaybot-events and legacy codex-events
   webhooks, and resume follow-up work. Use for /handoff when the user wants the current
-  task opened in its desktop app, or when the user explicitly chooses Codex or Claude Code.
+  task opened in its desktop app, when the user explicitly chooses Codex or Claude Code, or for
+  any follow-up on a task already running in Codex or Claude Code.
 ---
 # Dispatch a local coding task
 
-Choose the agent the user named. Use the same runner and workdir for every turn of that task.
+Choose the agent the user named. Once the user picks `/codex` or `/claude` for a task, that choice covers the task's follow-ups: further questions, extra research, fixes and tests go to the same agent and [resume](#resume) its session without asking again, and never get done another way instead. Ask the user to name an agent again only for an unrelated task. Use the same runner and workdir for every turn of that task.
 
 | Dispatch command | Runner |
 |---|---|

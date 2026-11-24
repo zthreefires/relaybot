@@ -1,6 +1,6 @@
 ---
 name: claude
-description: Use for /claude, for /handoff on a Claude task, or when the user explicitly chooses local Claude Code.
+description: Use for /claude, for /handoff on a Claude task, when the user explicitly chooses local Claude Code, or for any follow-up on a task already running in Claude Code.
 ---
 
 Load the `codex` skill and follow its Dispatch and Resume instructions, using `claude-run` for every turn.
