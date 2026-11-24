@@ -13,8 +13,9 @@ mkdir -p "$prefix"
 for s in claude-run claude-stream-run codex-run codex-app-run codex-notify codex-relay-hook relaybot-doctor; do
   install -m 755 "$src/bin/$s" "$prefix/$s"
 done
-install -m 644 "$src/bin/claude_preference.py" "$prefix/claude_preference.py"
-install -m 644 "$src/bin/desktop_handoff.py" "$prefix/desktop_handoff.py"
+for s in claude_preference.py desktop_handoff.py handoff_sync.py relaybot_files.py session_progress.py; do
+  install -m 644 "$src/bin/$s" "$prefix/$s"
+done
 mkdir -p "$home/webhooks"; chmod 700 "$home" "$home/webhooks"
 if [ ! -f "$home/config.env" ]; then
   install -m 600 "$src/config.example.env" "$home/config.env"
@@ -26,5 +27,5 @@ echo "installed to $prefix"
 echo
 echo "Next:"
 echo "  1. Run: $prefix/relaybot-doctor"
-echo "  2. Install skills/codex, skills/claude, skills/handoff, and skills/relaybot-setup into your agent."
+echo "  2. Install skills/codex, skills/claude, skills/handoff, skills/auto-sync, and skills/relaybot-setup into your agent."
 echo "  3. Run /relaybot-setup once per bot to check Codex and Claude Code and test their shared webhook."

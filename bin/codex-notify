@@ -4,6 +4,7 @@
 During a turn: `codex-notify <bot> needs_auth <run_dir> <workdir> <reason>` records the turn's
 first pause (codex-app-run calls it on approval/permission/user-input requests); nothing is sent.
 --final (codex-run only): POST the turn's single event. `test` events are sent directly.
+--handoff-sync <bot> <run_dir> <workdir>: POST the snapshot prepared under the handoff lock.
 Payload: see docs/ARCHITECTURE.md "Webhook events". Delivery failures go to outbox.jsonl.
 """
 import fcntl
@@ -44,15 +45,22 @@ def reserve(run, pause, event):
 def main():
     args = sys.argv[1:]
     final = args[:1] == ["--final"]
-    if final:
+    sync = args[:1] == ["--handoff-sync"]
+    if sync:
+        if len(args) != 4:
+            sys.exit(__doc__)
+        args = [args[1], "handoff_sync", *args[2:]]
+    elif final:
         args = args[1:]
     if len(args) not in (4, 5):
         sys.exit(__doc__)
     bot, event, run_dir, workdir = args[:4]
     msg = args[4] if len(args) == 5 else ""
     run = Path(run_dir)
+    if sync != (event == "handoff_sync"):
+        sys.exit(__doc__)
     try:
-        pause = (run / "pause").read_text().strip() if event != "test" else ""
+        pause = (run / "pause").read_text().strip() if event != "test" and not sync else ""
     except FileNotFoundError:
         pause = ""
     if not final and pause.startswith("turn-"):
@@ -69,7 +77,14 @@ def main():
         print("dedup: already reported this pause")
         return
     extra = {}
-    if event != "test":
+    if sync:
+        report = json.loads((run / "sync-status.json").read_bytes())
+        reply = (run / "sync.md").read_text(encoding="utf-8")
+        msg = report["message"]
+        extra = dict(session_id=report["session_id"], sync_status=report["sync_status"],
+                     handoff_at=report["handoff_at"], synced_at=report["synced_at"], reply=reply[:REPLY_MAX],
+                     reply_truncated=len(reply) > REPLY_MAX, reply_file=str(run / "sync.md"))
+    elif event != "test":
         sid = read(run / "session").strip() or None
         reply = read(run / "last.md")
         code = read(run / "exit").strip()

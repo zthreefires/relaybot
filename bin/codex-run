@@ -54,6 +54,16 @@ if [ "${1:-}" = /handoff ]; then
   if [ -z "$workdir" ] || [ "$workdir" = - ]; then workdir=${RELAYBOT_DEFAULT_WORKDIR:-$HOME/Documents/relaybot}; fi
   exec "$PY" "$here/desktop_handoff.py" "$agent" "$binary" "$RUN_ROOT" "$2" "$workdir"
 fi
+case "${1:-}" in
+  /auto-sync)
+    if [ "$#" -lt 3 ]; then
+      echo "usage: $runner /auto-sync <run_dir> <workdir|-> [on|off] [--bot <original-slug>]" >&2; exit 2
+    fi
+    exec "$PY" "$here/handoff_sync.py" "$agent" "$RUN_ROOT" "$2" /auto-sync "${@:4}" ;;
+  /sync)
+    [ "$#" -ge 2 ] || { echo "usage: $runner /sync <run_dir> [--bot <original-slug>]" >&2; exit 2; }
+    exec "$PY" "$here/handoff_sync.py" "$agent" "$RUN_ROOT" "$2" /sync "${@:3}" ;;
+esac
 mode=${4:-}
 choice=""
 usage() {
@@ -136,6 +146,10 @@ if [ "$mode" = resume ]; then
   fi
 else
   cp "$turn/input.md" "$run/task.md" || die "cannot save task"
+fi
+# Older runs acquire a route on their first dispatch after upgrade.
+if [ ! -f "$run/origin.json" ]; then
+  "$PY" "$here/relaybot_files.py" "$run" "$bot" || die "cannot save originating webhook route"
 fi
 export RELAYBOT_RUN_DIR=$run RELAYBOT_TURN_DIR=$turn
 # The prompt is the task, verbatim. Nothing is appended (it would show in the desktop thread).

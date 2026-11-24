@@ -11,7 +11,7 @@ Requirements: macOS or Linux, `bash`, `python3` (3.8+), a signed-in CLI for each
    ./install.sh                 # or ./install.sh --prefix ~/.local/bin
    ```
 
-   This copies `claude-run`, `claude-stream-run`, `claude_preference.py`, `desktop_handoff.py`, `codex-run`, `codex-app-run`, `codex-notify`, `codex-relay-hook`, `relaybot-doctor`,
+   This copies `claude-run`, `claude-stream-run`, `claude_preference.py`, `desktop_handoff.py`, `handoff_sync.py`, `session_progress.py`, `relaybot_files.py`, `codex-run`, `codex-app-run`, `codex-notify`, `codex-relay-hook`, `relaybot-doctor`,
    creates `~/.config/relaybot/` (mode 700) with `webhooks/`, and creates `config.env` from
    `config.example.env` if it does not exist.
 
@@ -24,7 +24,7 @@ Requirements: macOS or Linux, `bash`, `python3` (3.8+), a signed-in CLI for each
 4. Check: `relaybot-doctor` (read-only). From a clone, `tests/selftest.sh` runs an offline end-to-end
    test with stub Codex exec/app-server, Claude CLI and a local webhook. Pass an installed prefix to test that copy, e.g. `tests/selftest.sh ~/bin`.
 
-5. Install `skills/codex/SKILL.md`, `skills/claude/SKILL.md`, `skills/handoff/SKILL.md`, and `skills/relaybot-setup/SKILL.md` into your agent. Then,
+5. Install `skills/codex/SKILL.md`, `skills/claude/SKILL.md`, `skills/handoff/SKILL.md`, `skills/auto-sync/SKILL.md`, and `skills/relaybot-setup/SKILL.md` into your agent. Then,
    in each bot that should dispatch to either target, send `/relaybot-setup` once. It checks installation and sign-in for both CLIs and tests their shared webhook. New bots get one `relaybot-events` routine. Setup reuses an existing `codex-events` routine as is. A missing or signed-out CLI can be added later by rerunning setup.
 
 ## Configuration
@@ -48,6 +48,7 @@ Environment variables win over `config.env`. All keys are optional.
 | `RELAYBOT_PYTHON` | `python3` on PATH | interpreter for the helper scripts |
 | `RELAYBOT_CLIENT_NAME` | `relaybot` | client name reported to Codex |
 | `RELAYBOT_MAX_SECONDS` | none | optional cap per turn |
+| `RELAYBOT_HANDOFF_SYNC_HOURS` | 12 | Hours after handoff for an opted-in run’s one-shot desktop sync |
 | `RELAYBOT_FORCE_EXEC` | empty | skip app-server for ordinary Codex runs (env only). Managed worktree runs require app-server and fail when this is set. |
 
 Webhook files: `~/.config/relaybot/webhooks/<slug>.json`, mode 600, shaped like
@@ -56,6 +57,6 @@ Never commit them.
 
 ## Uninstall
 
-Remove the installed scripts from the prefix and `~/.config/relaybot/`. Nothing else is changed. relaybot
+Disable outstanding handoff timers with `/auto-sync off` before removing the installed scripts from the prefix and `~/.config/relaybot/`. relaybot
 passes no Codex hooks; installs from before this change may have left a relaybot hook trust entry under
 `[hooks.state]` in `~/.codex/config.toml`, which is now unused and can be deleted.

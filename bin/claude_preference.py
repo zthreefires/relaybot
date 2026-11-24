@@ -1,27 +1,14 @@
 """One outstanding Claude permission question per relaybot installation."""
-from contextlib import contextmanager
-import fcntl
 import json
 import os
 from pathlib import Path
 import re
 import sys
-import tempfile
+from relaybot_files import locked, replace_file
 
 
 KEY = "RELAYBOT_CLAUDE_SKIP_PERMISSIONS"
 OFFER = "claude-permission-offer.json"
-
-
-@contextmanager
-def locked(home):
-    home.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fd = os.open(home, os.O_RDONLY)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        yield
-    finally:
-        os.close(fd)
 
 
 def read_file(path):
@@ -29,17 +16,6 @@ def read_file(path):
         return path.read_bytes()
     except FileNotFoundError:
         return b""
-
-
-def replace_file(path, data):
-    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as temp:
-        try:
-            temp.write(data)
-            temp.flush()
-            os.fsync(temp.fileno())
-            os.replace(temp.name, path)
-        finally:
-            Path(temp.name).unlink(missing_ok=True)
 
 
 def configured(config):

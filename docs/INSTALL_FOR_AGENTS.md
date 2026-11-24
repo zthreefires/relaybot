@@ -39,8 +39,8 @@ Ask the user for the values they care about and set them in `~/.config/relaybot/
 
 ## 4. Install the skills and wire the bot
 
-Install `skills/codex/SKILL.md`, `skills/claude/SKILL.md`, `skills/handoff/SKILL.md`, and `skills/relaybot-setup/SKILL.md` into the agent's skill store.
-On upgrade, install the handoff skill and refresh the codex and claude skills in each dispatching bot.
+Install `skills/codex/SKILL.md`, `skills/claude/SKILL.md`, `skills/handoff/SKILL.md`, `skills/auto-sync/SKILL.md`, and `skills/relaybot-setup/SKILL.md` into the agent's skill store.
+On upgrade, install the auto-sync skill and refresh the handoff, codex and claude skills in each dispatching bot.
 
 Run `/relaybot-setup` in the dispatching bot's chat. It checks both CLIs and their sign-in status and sends one shared test. Reuse the bot's existing event routine and slug. The legacy `codex-events` routine works as is. Create `relaybot-events` only when neither name exists. If a CLI is missing or signed out, finish the other route and webhook test. Give the user the missing CLI's install or sign-in instructions.
 

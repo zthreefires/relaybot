@@ -1,9 +1,11 @@
 """Black-box regression tests for the repository or an installed prefix."""
+from datetime import datetime, timezone
 import fcntl
 import http.server
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import select
 import subprocess
@@ -232,6 +234,203 @@ class Runs(unittest.TestCase):
         self.reject(self.handoff('codex', run, self.work))
         self.assertEqual(sum('open' in r for r in self.records()), 1)
         self.assertEqual(self.server.calls, [])
+
+    def sync_command(self, agent, *args, success=True):
+        proc = subprocess.run([BIN / (agent + '-run'), *args], env=self.env, capture_output=True,
+                              text=True, timeout=10)
+        self.assertEqual(proc.returncode == 0, success, proc.stdout + proc.stderr)
+        return proc.stdout + proc.stderr
+
+    def sync_tools(self):
+        opener = self.root / ('open' if sys.platform == 'darwin' else 'xdg-open')
+        opener.write_text('#!/bin/sh\nexit 0\n')
+        opener.chmod(0o755)
+        launchctl = self.root / 'launchctl'
+        launchctl.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$HOME/jobs"\n'
+                             'if [ "$1" = bootstrap ] && [ -f "$HOME/fail-bootstrap" ]; then exit 5; fi\n')
+        launchctl.chmod(0o755)
+        self.env.update(PATH=str(self.root) + os.pathsep + self.env['PATH'],
+                        CLAUDE_CONFIG_DIR=str(self.root / 'claude store'))
+        return self.root / 'Library/LaunchAgents'
+
+    def test_manual_desktop_sync(self):
+        self.sync_tools()
+        for agent in ('codex', 'claude'):
+            run = self.finish(self.launch('app' if agent == 'codex' else 'claude'), 'done')
+            sid = self.payload['session_id']
+            self.sync_command(agent, '/sync', run, success=False)
+            proc = self.handoff(agent, run, self.work)
+            out, err = proc.communicate(timeout=5)
+            self.assertEqual(proc.returncode, 0, out + err)
+            self.assertFalse((self.root / 'jobs').exists())
+            handoff = json.loads((run / 'handoff/state.json').read_text())
+            at = handoff['at']
+            turn_files = ('last.md', 'status.json', 'notified.jsonl', 'pause', 'session')
+            turn = [(run / f).read_bytes() for f in turn_files]
+            store = Path(handoff['transcripts'])
+            path = (store / '2026/01/01' / ('rollout-2026-01-01-' + sid + '.jsonl') if agent == 'codex'
+                    else store / '-project' / (sid + '.jsonl'))
+            path.parent.mkdir(parents=True)
+
+            def append(t, row):
+                row['timestamp'] = datetime.fromtimestamp(at + t, timezone.utc).isoformat()
+                with path.open('a') as f:
+                    print(json.dumps(row), file=f)
+
+            def snapshot(status, expected):
+                self.sync_command(agent, '/sync', run)
+                body = self.server.calls.pop()[2]
+                self.assertEqual((body['event'], body['sync_status'], body['session_id']),
+                                 ('handoff_sync', status, sid))
+                self.assertEqual(body['handoff_at'], at)
+                self.assertEqual(body['workdir'], str(self.work))
+                self.assertEqual(body['reply_file'], str(run / 'sync.md'))
+                self.assertEqual(body['reply'], expected[:8000])
+                self.assertEqual(body['reply_truncated'], len(expected) > 8000)
+                self.assertEqual((run / 'sync.md').read_text(), expected)
+                report = json.loads((run / 'sync-status.json').read_bytes())
+                self.assertEqual((report['sync_status'], report['synced_at']), (status, body['synced_at']))
+
+            if agent == 'codex':
+                def message(text, final):
+                    return dict(type='response_item', payload=dict(type='message', role='assistant',
+                                phase='final_answer' if final else 'commentary',
+                                content=[dict(type='output_text', text=text)]))
+                append(-10, dict(type='session_meta', payload=dict(id=sid)))
+            else:
+                def message(text, final):
+                    return dict(type='assistant', sessionId=sid, message=dict(role='assistant',
+                                stop_reason='end_turn' if final else 'tool_use',
+                                content=[dict(type='thinking', thinking='hidden'), dict(type='text', text=text)]))
+
+            append(-4, message('old answer', True))
+            snapshot('no_progress', 'No new progress since handoff.')
+            if agent == 'codex':
+                append(.1, dict(type='event_msg', payload=dict(type='task_started')))
+                append(.2, message('first fix', True))
+                snapshot('running', 'first fix')  # final text arrived before the turn completed
+                append(.3, dict(type='event_msg', payload=dict(type='task_complete', last_agent_message='first fix')))
+                append(.4, dict(type='event_msg', payload=dict(type='task_started')))
+            else:
+                append(.1, dict(type='user', sessionId=sid))
+                append(.2, message('first fix', True))
+                append(.4, dict(type='user', sessionId=sid))
+            append(1, message('checking tests', False))
+            snapshot('running', 'first fix\n\nchecking tests')
+            if agent == 'codex':
+                append(2, dict(type='response_item', payload=dict(type='function_call_output', output='private log')))
+            else:
+                append(2, dict(message('other session', True), sessionId='unrelated'))
+                append(2, dict(message('child message', True), isSidechain=True))
+            final = 'verified ' + '文' * 8100
+            append(3, message(final, True))
+            if agent == 'codex':
+                append(4, dict(type='event_msg', payload=dict(type='task_complete', last_agent_message=final)))
+            with path.open('ab') as f:
+                f.write(b'{"type":')
+            transcript = path.read_bytes()
+            self.env['RELAYBOT_HOME'] = str(self.root / 'other installation')
+            snapshot('done', 'first fix\n\n' + final)
+            self.env['RELAYBOT_HOME'] = str(self.home)
+            self.assertEqual(path.read_bytes(), transcript)
+            self.assertEqual([(run / f).read_bytes() for f in turn_files], turn)
+            path.unlink()
+            snapshot('unavailable', 'Could not identify a unique local transcript for the handed-off session.')
+
+    def test_sync_requires_owned_run_and_route(self):
+        agents = self.sync_tools()
+        run = self.finish(self.launch('app'), 'done')
+        alias = run.with_name('codex-run-alias')
+        alias.symlink_to(run)
+        self.sync_command('codex', '/auto-sync', alias, self.work, success=False)
+        (run / 'origin.json').unlink()  # A pre-upgrade run can still open on desktop.
+        self.sync_command('codex', '/handoff', run, self.work)
+        for args in [('/auto-sync', run, self.work), ('/sync', run)]:
+            self.assertIn('original bot', self.sync_command('codex', *args, success=False))
+        self.assertEqual(self.server.calls, [])
+        self.assertFalse(agents.exists())
+        self.sync_command('codex', '/sync', run, '--bot', '../other', success=False)
+        self.assertFalse((run / 'origin.json').exists())
+        self.sync_command('codex', '/sync', run, '--bot', 'test')
+        self.assertEqual(self.server.calls.pop()[2]['event'], 'handoff_sync')
+        self.sync_command('codex', '/sync', run, '--bot', 'other', success=False)
+        self.assertEqual(json.loads((run / 'origin.json').read_bytes())['bot'], 'test')
+        self.assertEqual(self.server.calls, [])
+
+    def test_handoff_job_lifecycle(self):
+        agents = self.sync_tools()
+        config = self.home / 'config.env'
+        run = self.finish(self.launch('claude'), 'done')
+
+        def auto(*choice, **kwargs):
+            return self.sync_command('claude', '/auto-sync', run, self.work, *choice, **kwargs)
+
+        def open_desktop(**cfg):
+            proc = self.handoff('claude', run, self.work, **cfg)
+            out, err = proc.communicate(timeout=10)
+            self.assertEqual(proc.returncode == 0, not cfg.get('desktop_exit'), out + err)
+
+        def job():
+            path, = agents.glob('*.plist')
+            spec = plistlib.loads(path.read_bytes())
+            self.assertTrue(spec['RunAtLoad'])
+            self.assertIn('StartCalendarInterval', spec)
+            self.assertNotIn('synthetic-test-value', str(spec))
+            return spec
+
+        def fire(spec):
+            env = dict(spec['EnvironmentVariables'], PATH=self.env['PATH'])
+            subprocess.run(spec['ProgramArguments'], env=env, check=True, capture_output=True, timeout=10)
+
+        auto('invalid', success=False)
+        auto()  # opt in before any handoff
+        self.assertFalse(agents.exists())
+        open_desktop()
+        old = job()
+        state = json.loads((run / 'handoff/state.json').read_bytes())
+        self.assertEqual(state['due'] - state['at'], 12 * 3600)
+        fire(old)  # RunAtLoad before the deadline
+        self.assertEqual(self.server.calls, [])
+        auto('on')
+        open_desktop(desktop_exit=1)
+        self.assertEqual(job(), old)
+        open_desktop()
+        new = job()
+        self.assertNotEqual(new['Label'], old['Label'])
+        self.assertIn('bootout gui/' + str(os.getuid()) + '/' + old['Label'], (self.root / 'jobs').read_text())
+        fire(old)
+        self.assertEqual(job(), new)
+        auto('off')
+        self.assertEqual(list(agents.glob('*.plist')), [])
+        fire(new)
+        self.assertEqual(self.server.calls, [])
+        open_desktop()  # off remains off
+        self.assertEqual(list(agents.glob('*.plist')), [])
+
+        # Enable after an elapsed handoff; simulate launchd's clean environment and concurrent wakes.
+        config.write_text('RELAYBOT_HANDOFF_SYNC_HOURS=0.000001\n')
+        (self.root / 'fail-bootstrap').touch()
+        auto('on', success=False)
+        self.assertEqual(list(agents.glob('*.plist')), [])
+        (self.root / 'fail-bootstrap').unlink()
+        auto('on')
+        current = job()
+        self.endpoint(503)
+        env = dict(current['EnvironmentVariables'], PATH=self.env['PATH'])
+        workers = [subprocess.Popen(current['ProgramArguments'], env=env, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE) for _ in range(2)]
+        for worker in workers:
+            out, err = worker.communicate(timeout=5)
+            self.assertEqual(worker.returncode, 0, out + err)
+        self.assertEqual([x[2]['event'] for x in self.server.calls], ['handoff_sync'])
+        self.assertEqual(list(agents.glob('*.plist')), [])
+        queued = json.loads((self.home / 'outbox.jsonl').read_text())
+        self.assertEqual((queued['bot'], queued['event'], queued['sync_status']),
+                         ('test', 'handoff_sync', 'unavailable'))
+        self.assertNotIn('synthetic-test-value', str(queued))
+        auto('on')
+        self.assertEqual(list(agents.glob('*.plist')), [])
+        self.sync_command('codex', '/sync', run, success=False)
 
     def permission_choice(self, run, turn, choice, bot='test', cwd=None, task=None):
         return subprocess.Popen([BIN / 'claude-run', bot, cwd or self.work, task or run / 'task.md',

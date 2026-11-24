@@ -33,7 +33,16 @@ A new task creates a private directory with `mktemp -d` under `RELAYBOT_RUN_ROOT
 | `pause` | shared launcher | id of this launch; notifications and status are scoped to it |
 | `notified.jsonl` | codex-notify | dedupe ledger |
 | `exit`, `pid` | shared launcher | exit code and pid |
+| `origin.json` | shared launcher | original bot slug and configuration directory for delayed delivery |
+| `handoff/state.json` | handoff helpers | per-run opt-in, latest handoff time, workdir, transcript root, session ID and pending launchd job |
+| `sync.md`, `sync-status.json` | handoff sync | desktop snapshot and its status, handoff time and session ID |
 | `followup.md` | the agent | text for a `resume` turn |
+
+## Desktop handoff sync
+
+A successful handoff records the session and time under a separate run-local lock. Opted-in runs install a calendar LaunchAgent under `~/Library/LaunchAgents/local.relaybot.handoff-sync.<id>.plist`. Each new timer has its own ID. At load and at the calendar deadline, the worker checks the current ID and due time under the same lock. Turning sync off or handing off again invalidates the previous ID. A worker removes its own plist and unloads its job after delivery or queuing.
+
+The worker opens the exact Codex rollout under `$CODEX_HOME/sessions` (default `~/.codex/sessions`) or Claude transcript under `$CLAUDE_CONFIG_DIR/projects` (default `~/.claude/projects`) read-only. It uses timestamped assistant messages, tool activity and turn lifecycle records. A missing, ambiguous or unreadable transcript produces `unavailable`. Running status reflects the latest recorded turn state. The originating bot receives the sync through its existing webhook, independently of the turn notification ledger.
 
 ## app-server flow (preferred path)
 
@@ -149,7 +158,7 @@ Headers: `Content-Type: application/json`, `Authorization: Bearer <key>`, `X-Aut
 
 | field | meaning |
 |---|---|
-| `event` | `done`, `needs_auth`, `failed`, `test` (`blocked` only from older sessions, see above) |
+| `event` | `done`, `needs_auth`, `failed`, `handoff_sync`, `test` (`blocked` only from older sessions, see above) |
 | `run_id`, `run_dir`, `workdir`, `ts` | the run directory's name and path, the agent's cwd, send time (unix seconds) |
 | `message` | Up to 2000 characters. For `done`, the reply start. For `needs_auth`, the request and any reply start. For `failed`, the reason and the current turn's log tail. |
 | `pause_kind` | For a structured Claude pause, the kind of request, such as `tool_approval`, `user_input`, `account` or `denial`. Older events may omit it. |
@@ -158,7 +167,9 @@ Headers: `Content-Type: application/json`, `Authorization: Bearer <key>`, `X-Aut
 | `exit_code` | the runner's exit code for this launch (`0` for `done`/`needs_auth`) |
 | `reply` | this turn's final agent message (`last.md`), first 8000 chars; `""` if there was none |
 | `reply_truncated` | `true` when `reply` was cut; read `reply_file` for the rest |
-| `reply_file` | path of `last.md` on the relaybot computer, or `null` when there is no reply |
+| `reply_file` | path of `sync.md` for `handoff_sync`, otherwise `last.md` on the relaybot computer, or `null` when there is no reply |
+
+A `handoff_sync` event carries the snapshot in `reply` (first 8000 characters), the captured `session_id`, `handoff_at` and `synced_at` (Unix seconds), and `sync_status` (`done`, `running`, `interrupted`, `no_progress` or `unavailable`). The `message` describes the read result. The desktop snapshot has no runner exit code.
 
 `test` events carry only `event, run_id, run_dir, workdir, message, ts`.
 
@@ -167,6 +178,7 @@ Headers: `Content-Type: application/json`, `Authorization: Bearer <key>`, `X-Aut
 | `done` | the turn completed with a final reply and no pause was recorded | read `reply`: report the result, relay the agent's question, or say what blocks it |
 | `needs_auth` | Codex requested approval/input or Claude reported one of the pause signals above | tell the user what the agent requested (`message`, `status.json` `reason`) and any final reply (`reply`); continue only after they agree |
 | `failed` | nonzero exit (app-server error, interrupted, killed, exec failure, resume mismatch), or no final reply | report the reason and log tail |
+| `handoff_sync` | the handoff timer fired or the user requested a manual sync | report desktop results and open issues in the originating chat. A no-progress event may stay quiet |
 | `test` | `/relaybot-setup` or `relaybot-doctor --webhook-test` | confirm the webhook works |
 
 Delivery: only a direct HTTP 2xx counts. Redirects (301, 302, 303, 307, 308) and other failures are

@@ -45,6 +45,21 @@ Send `/handoff` in the bot chat. The bot opens the Codex thread or the Claude De
 
 The local command is `<runner> /handoff "<run_dir>" "<workdir>"`, using the runner that created the task. Codex opens its thread link. Claude waits for the relaybot turn to exit, then runs `claude --desktop --resume <session_id>` in the original workdir. If an interactive Claude terminal still owns the session, use `/desktop` there. On macOS, Claude handoff requires Claude Desktop and Claude Code 2.1.285 or later signed in with a Claude subscription. [Claude Desktop session handoff](https://code.claude.com/docs/en/desktop#desktop-vs-cli)
 
+## Sync desktop progress
+
+Auto-sync is off for each new run. Send `/auto-sync` or `/auto-sync on` in the originating chat, before or after opening the task with `/handoff`. The Mac schedules one update 12 hours from the latest successful handoff. If that deadline has passed when you enable it, the job runs immediately. Another handoff starts a fresh interval. Send `/auto-sync off` to cancel the pending job and turn off future timers for that run.
+
+```bash
+codex-run /auto-sync "$run_dir" "$workdir" on
+codex-run /handoff "$run_dir" "$workdir"
+codex-run /sync "$run_dir"                    # request a snapshot now
+codex-run /auto-sync "$run_dir" "$workdir" off
+```
+
+Use `claude-run` for a Claude task. Manual `/sync` works after handoff, including when auto-sync is off. Each manual request sends a fresh snapshot and keeps any automatic timer. The report contains the visible reply from each new turn, or the latest available progress if the last turn is still open. A quiet session sends a no-progress event. An inaccessible transcript produces a read-error report.
+
+Set `RELAYBOT_HANDOFF_SYNC_HOURS` in `config.env` to a positive number of hours, including fractional hours. Automatic scheduling uses the logged-in user's macOS LaunchAgents and fires with minute precision. A missed deadline is checked on wake or login. Keep the run directory and local transcript until then. If your system clears `/tmp` on reboot, configure a persistent `RELAYBOT_RUN_ROOT` before dispatch. For a run created before this feature, append `--bot "<original-slug>"` to `/auto-sync on` or the manual `/sync` command if the route is missing. Use the bot recorded in the originating chat.
+
 ## Running the scripts by hand
 
 ```bash
