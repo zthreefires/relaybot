@@ -128,10 +128,10 @@ Use `/codex` or `/claude` and follow [`skills/codex/SKILL.md`](skills/codex/SKIL
 /codex <what the user wants done>
 /claude <what the user wants done>
 /handoff                         # open this task in its desktop app
-/auto-sync [on|off]               # enable or cancel a desktop update for this task (default off)
+/auto-sync [on|off]               # change automatic desktop updates for this task only
 ```
 
-On macOS, send `/auto-sync` before or after `/handoff` to receive one desktop update in the originating chat. The default delay is 12 hours from the latest handoff. Set `RELAYBOT_HANDOFF_SYNC_HOURS` to change it. [Desktop sync usage](docs/USAGE.md#sync-desktop-progress)
+On macOS, each successful `/handoff` schedules one update in the originating chat, by default 12 hours later. Another handoff restarts the timer. Use `/auto-sync off` to cancel it for this run and `/auto-sync on` to re-enable it. In `config.env`, set `RELAYBOT_HANDOFF_AUTO_SYNC=0` to disable automatic updates globally (default `1`), or change the delay with `RELAYBOT_HANDOFF_SYNC_HOURS`. [Desktop sync usage](docs/USAGE.md#sync-desktop-progress)
 
 1. Write the task and relevant context to a UTF-8 file on the user's computer. Use the folder the user named or verify the existing clone under `RELAYBOT_REPOS_ROOT`. Ask if the project is unclear. Use `-` for a task tied to no project.
 2. For a new task, changed workdir or explicit request for a fresh session, start `codex-run <bot> "<workdir>" /tmp/task.md` or `claude-run <bot> "<workdir>" /tmp/task.md` in the background. For an isolated Codex task, pass the main repository root and append `--worktree "<branch>"`. Both runners use the bot's webhook slug. Tell the user which agent and folder you used.

@@ -185,6 +185,7 @@ class Runs(unittest.TestCase):
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     def test_claude_desktop_handoff(self):
+        agents = self.sync_tools()
         workdir = self.root / 'project with spaces'
         run = self.finish(self.launch('claude', work=workdir), 'done')
         sid = self.payload['session_id']
@@ -203,15 +204,16 @@ class Runs(unittest.TestCase):
         out, err = proc.communicate(timeout=5)
         self.assertEqual(proc.returncode, 0, out + err)
         self.assertEqual(self.records()[-1], dict(desktop=sid, cwd=str(workdir)))
+        self.assertEqual(len(list(agents.glob('*.plist'))), 1)
         self.assertEqual(self.server.calls, [])
         self.reject(self.handoff('claude', run, workdir, desktop_exit=1))
 
     def test_codex_desktop_handoff(self):
+        agents = self.sync_tools()
         opener = self.root / ('open' if sys.platform == 'darwin' else 'xdg-open')
         opener.write_text('#!/usr/bin/env python3\nimport json, os, sys\n'
                           'with open(os.environ["TRACE"], "a") as f: print(json.dumps({"open": sys.argv[1:]}), file=f)\n')
         opener.chmod(0o755)
-        self.env['PATH'] = str(self.root) + os.pathsep + self.env['PATH']
         run = self.finish(self.launch('app'), 'done')
         sid = self.payload['session_id']
         opened = dict(open=['codex://threads/' + sid])
@@ -227,6 +229,7 @@ class Runs(unittest.TestCase):
             os.close(fd)
         self.assertEqual(proc.returncode, 0, out + err)
         self.assertIn(opened, self.records())
+        self.assertEqual(len(list(agents.glob('*.plist'))), 1)
         self.reject(self.handoff('claude', run, self.work))
         (run / 'session').write_text('../other')
         self.reject(self.handoff('codex', run, self.work))
@@ -255,6 +258,7 @@ class Runs(unittest.TestCase):
 
     def test_manual_desktop_sync(self):
         self.sync_tools()
+        (self.home / 'config.env').write_text('RELAYBOT_HANDOFF_AUTO_SYNC=0\n')
         for agent in ('codex', 'claude'):
             run = self.finish(self.launch('app' if agent == 'codex' else 'claude'), 'done')
             sid = self.payload['session_id']
@@ -383,7 +387,6 @@ class Runs(unittest.TestCase):
             subprocess.run(spec['ProgramArguments'], env=env, check=True, capture_output=True, timeout=10)
 
         auto('invalid', success=False)
-        auto()  # opt in before any handoff
         self.assertFalse(agents.exists())
         open_desktop()
         old = job()
@@ -431,6 +434,50 @@ class Runs(unittest.TestCase):
         auto('on')
         self.assertEqual(list(agents.glob('*.plist')), [])
         self.sync_command('codex', '/sync', run, success=False)
+
+    def test_auto_sync_global_switch_and_run_preference(self):
+        agents = self.sync_tools()
+        config = self.home / 'config.env'
+        auto_sync = 'RELAYBOT_HANDOFF_AUTO_SYNC'
+        short_delay = 'RELAYBOT_HANDOFF_SYNC_HOURS=0.000001\n'
+        config.write_text(short_delay + auto_sync + '=0\n')
+        run = self.finish(self.launch('app'), 'done')
+        handoff = ('/handoff', run, self.work)
+        toggle = ('/auto-sync', run, self.work)
+
+        self.sync_command('codex', *handoff)
+        self.assertIn('disabled globally', self.sync_command('codex', *toggle, 'on'))
+        self.assertFalse(agents.exists())
+        config.write_text(short_delay + auto_sync + '=1\n')
+        self.sync_command('codex', *toggle, 'off')
+        self.sync_command('codex', *handoff)
+        self.assertFalse(agents.exists())
+
+        # A due job must check the current config even with a clean launchd environment.
+        self.sync_command('codex', *toggle, 'on')
+        path, = agents.glob('*.plist')
+        spec = plistlib.loads(path.read_bytes())
+        config.write_text(short_delay + auto_sync + '="0"\n')
+        env = dict(spec['EnvironmentVariables'], PATH=self.env['PATH'])
+        subprocess.run(spec['ProgramArguments'], env=env, check=True, capture_output=True, timeout=10)
+        self.assertFalse(path.exists())
+        self.assertEqual(self.server.calls, [])
+        self.assertNotIn('job', json.loads((run / 'handoff/state.json').read_bytes()))
+
+        # Explicit environment settings take precedence for this handoff and its worker.
+        self.env[auto_sync] = '1'
+        self.sync_command('codex', *handoff)
+        path, = agents.glob('*.plist')
+        spec = plistlib.loads(path.read_bytes())
+        env = dict(spec['EnvironmentVariables'], PATH=self.env['PATH'])
+        subprocess.run(spec['ProgramArguments'], env=env, check=True, capture_output=True, timeout=10)
+        self.assertEqual([c[2]['event'] for c in self.server.calls], ['handoff_sync'])
+        self.assertFalse(path.exists())
+
+        config.write_text(auto_sync + '=1\n')
+        self.env[auto_sync] = '0'
+        self.sync_command('codex', *handoff)
+        self.assertEqual(list(agents.glob('*.plist')), [])
 
     def permission_choice(self, run, turn, choice, bot='test', cwd=None, task=None):
         return subprocess.Popen([BIN / 'claude-run', bot, cwd or self.work, task or run / 'task.md',

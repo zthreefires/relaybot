@@ -4,26 +4,11 @@ import os
 from pathlib import Path
 import re
 import sys
-from relaybot_files import locked, replace_file
+from relaybot_files import config_value, locked, read_file, replace_file
 
 
 KEY = "RELAYBOT_CLAUDE_SKIP_PERMISSIONS"
 OFFER = "claude-permission-offer.json"
-
-
-def read_file(path):
-    try:
-        return path.read_bytes()
-    except FileNotFoundError:
-        return b""
-
-
-def configured(config):
-    for line in config.splitlines():
-        key, _, value = line.partition(b"=")
-        if key.strip() == KEY.encode() and value.strip().strip(b'"'):
-            return value.strip().strip(b'"').decode()
-    return ""
 
 
 def save_preference(path, config, value):
@@ -54,7 +39,7 @@ def current_question(target):
 
 def reserve_offer(home, target):
     with locked(home):
-        if not current_question(target) or os.environ.get(KEY) or configured(read_file(home / "config.env")):
+        if not current_question(target) or os.environ.get(KEY) or config_value(read_file(home / "config.env"), KEY):
             return False
         old = outstanding(home)
         if old and current_question(old):
@@ -72,7 +57,7 @@ def answer(home, target, choice):
         path = home / "config.env"
         config = read_file(path)
         value = "1" if choice == "yes" else "0"
-        stored = configured(config)
+        stored = config_value(config, KEY)
         if any(v and v != value for v in (stored, os.environ.get(KEY))):
             sys.exit("A different Claude permission preference is already configured.")
         if not stored:

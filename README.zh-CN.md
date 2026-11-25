@@ -128,10 +128,10 @@ git clone https://github.com/zthreefires/relaybot.git ~/relaybot 2>/dev/null || 
 /codex <使用者要做的事>
 /claude <使用者要做的事>
 /handoff                         # 在对应的桌面端打开当前任务
-/auto-sync [on|off]               # 为当前任务启用或取消桌面进展回传（默认关闭）
+/auto-sync [on|off]               # 仅更改当前任务的自动回传设置
 ```
 
-在 Mac 上发送 `/auto-sync` 后，最近一次 `/handoff` 的桌面进展会在 12 小时后回到原聊天。再次接手会重新计时。可以用 `RELAYBOT_HANDOFF_SYNC_HOURS` 调整时间。[使用说明](docs/USAGE.md#sync-desktop-progress)
+在 Mac 上，每次成功执行 `/handoff` 后，桌面进展默认会在 12 小时后回传到原聊天一次。再次接手会重新计时。发送 `/auto-sync off` 可取消当前任务的自动回传，用 `/auto-sync on` 可重新启用。在 `config.env` 中将 `RELAYBOT_HANDOFF_AUTO_SYNC` 设为 `0` 可全局关闭自动回传（默认值为 `1`）。用 `RELAYBOT_HANDOFF_SYNC_HOURS` 可调整回传时间。[使用说明](docs/USAGE.md#sync-desktop-progress)
 
 1. 把任务和相关上下文写入使用者电脑上的 UTF-8 文件。用使用者指定的目录，或确认 `RELAYBOT_REPOS_ROOT` 下已有对应 clone。判断不了项目时先询问。只有与已有项目无关的任务才传 `-`。
 2. 遇到新任务、工作目录改变或使用者明确要求新开会话时，在后台启动 `codex-run <bot> "<workdir>" /tmp/task.md` 或 `claude-run <bot> "<workdir>" /tmp/task.md`。Codex 任务需要隔离时，传主仓库根目录，并在末尾加上 `--worktree "<分支>"`。两者共用这个 bot 的 webhook slug。告诉使用者启动了哪个 agent、工作目录在哪里。

@@ -9,8 +9,8 @@ Run `<runner> /handoff "<run_dir>" "<workdir>"` on that computer. Use the instal
 
 ## Auto-sync
 
-Auto-sync is off by default for each run. Only a user-authored `/auto-sync` or `/auto-sync on` enables it. Resolve the runner, run directory and workdir from the task recorded in this chat, just as for handoff. Run `<runner> /auto-sync "<run_dir>" "<workdir>" on`. Report the scheduled time if printed. Before the first handoff, tell the user the timer starts when they open the task with `/handoff`.
+Auto-sync is on by default. On macOS, a successful `/handoff` schedules one desktop update in the originating chat. The timer starts at the latest successful handoff and uses `RELAYBOT_HANDOFF_SYNC_HOURS` (default 12). Report the scheduled time when the runner prints it.
 
-If an older run lacks a saved webhook route, use the original slug recorded for this bot at dispatch and retry with `--bot "<original-slug>"`. If that record is unavailable, ask the user to identify the originating bot.
+Only change the run's preference on a user-authored `/auto-sync` command. Resolve the runner, run directory and workdir from the task recorded in this chat. For `/auto-sync off`, run `<runner> /auto-sync "<run_dir>" "<workdir>" off` to cancel the pending job and disable future timers for that run. For `/auto-sync on` or bare `/auto-sync`, use the same command with `on`. Re-enabling uses the latest handoff's deadline, or waits for the first handoff. With `RELAYBOT_HANDOFF_AUTO_SYNC=0`, automatic updates are disabled globally. Report that setting if the runner identifies it.
 
-The Mac sends one snapshot 12 hours after the latest successful handoff, or after the interval configured in `RELAYBOT_HANDOFF_SYNC_HOURS`. Enabling it after handoff uses that same deadline. Another handoff restarts the timer. For `/auto-sync off`, use the same command with `off` to cancel the pending job and disable future timers for this run. Relay runner errors. The bot does not need to set a reminder or start a coding turn.
+If the runner reports a missing webhook route for an older run, use `/auto-sync on` with `--bot "<original-slug>"` to schedule the update for the completed handoff. Use the original slug recorded at dispatch. If that record is unavailable, ask the user to identify the originating bot. Relay runner errors.

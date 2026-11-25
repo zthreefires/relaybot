@@ -13,8 +13,17 @@ import sys
 import time
 import uuid
 
-from relaybot_files import locked, replace_file, save_origin
+from relaybot_files import config_value, locked, read_file, replace_file, save_origin
 from session_progress import Unavailable, progress
+
+AUTO_SYNC = "RELAYBOT_HANDOFF_AUTO_SYNC"
+
+
+def globally_enabled(home):
+    value = os.environ.get(AUTO_SYNC) or config_value(read_file(Path(home) / "config.env"), AUTO_SYNC) or "1"
+    if value not in ("0", "1"):
+        raise ValueError(f"{AUTO_SYNC} must be 0 or 1.")
+    return value == "1"
 
 
 def owned_run(agent, root, directory):
@@ -35,7 +44,7 @@ def handoff_state(run):
         try:
             state = json.loads((folder / "state.json").read_bytes())
         except FileNotFoundError:
-            state = {"enabled": False}
+            state = {"enabled": True}
         yield state
 
 
@@ -97,9 +106,12 @@ def arm(agent, run, state):
     when = datetime.fromtimestamp(math.ceil(due / 60) * 60)
     token = uuid.uuid4().hex
     label, path = job_info(token)
+    env = {"HOME": str(Path.home()), "RELAYBOT_HOME": os.path.realpath(os.environ["RELAYBOT_HOME"])}
+    if os.environ.get(AUTO_SYNC):
+        env[AUTO_SYNC] = os.environ[AUTO_SYNC]
     spec = dict(Label=label, ProgramArguments=[sys.executable, str(Path(__file__).resolve()), agent,
                                                str(run.parent), str(run), "fire", token],
-                EnvironmentVariables={"HOME": str(Path.home())},
+                EnvironmentVariables=env,
                 StartCalendarInterval=dict(Month=when.month, Day=when.day, Hour=when.hour, Minute=when.minute),
                 RunAtLoad=True)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -122,7 +134,13 @@ def record_handoff(agent, run, state, workdir, session, at):
     state.update(at=at, workdir=str(Path(workdir).resolve()), session_id=session, transcripts=str(store.resolve()),
                  fired=False)
     disarm(run, state)
-    arm(agent, run, state)
+    if state["enabled"] and globally_enabled(os.environ["RELAYBOT_HOME"]):
+        if not shutil.which("launchctl"):
+            print("Automatic sync requires macOS launchd. Manual /sync is available.")
+        elif not (run / "origin.json").is_file():
+            print("No saved webhook route. Use /auto-sync on with --bot <original-slug> to schedule this handoff.")
+        else:
+            arm(agent, run, state)
 
 
 def sync(agent, run, state, bot=None):
@@ -156,10 +174,13 @@ def fire(agent, root, directory, token):
                 cleanup = False  # RunAtLoad also checks for a missed deadline after login.
                 return
             try:
-                sync(agent, run, state)
+                # Jobs installed by earlier versions have only HOME in their plist.
+                home = os.environ.get("RELAYBOT_HOME") or origin(run)["home"]
+                if globally_enabled(home):
+                    state["fired"] = True
+                    sync(agent, run, state)
             finally:
                 state.pop("job")
-                state["fired"] = True
                 save(run, state)
     finally:
         if cleanup:
@@ -189,6 +210,10 @@ def main():
             print("Auto-sync off for this run.")
             return
         origin(run, bot)
+        if not globally_enabled(os.environ["RELAYBOT_HOME"]):
+            disarm(run, state)
+            print("Auto-sync on for this run. Automatic sync is disabled globally.")
+            return
         delay_seconds()
         if not shutil.which("launchctl"):
             raise ValueError("Automatic sync requires macOS launchd. Manual /sync is available.")

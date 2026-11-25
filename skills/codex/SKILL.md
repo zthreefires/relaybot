@@ -15,7 +15,7 @@ Choose the agent the user named. Once the user picks `/codex` or `/claude` for a
 | `/codex` | `codex-run` |
 | `/claude` | `claude-run` |
 
-For a user message of `/handoff` or `/auto-sync [on|off]`, load the `handoff` skill.
+For a user message of `/handoff` or `/auto-sync [on|off]`, load the `handoff` skill. A successful handoff schedules a desktop update by default. The `/auto-sync` command changes the preference for this run only.
 
 ## Dispatch
 

@@ -26,6 +26,7 @@ git clone https://github.com/zthreefires/relaybot.git ~/relaybot 2>/dev/null || 
 Ask the user for the values they care about and set them in `~/.config/relaybot/config.env`:
 
 - `RELAYBOT_CLAUDE_BIN`: optional explicit path to Claude Code.
+- `RELAYBOT_HANDOFF_AUTO_SYNC` defaults to `1`. Set it to `0` to disable automatic desktop updates for this installation. `RELAYBOT_HANDOFF_SYNC_HOURS` sets the delay after handoff (default 12 hours).
 - `RELAYBOT_MODEL`, `RELAYBOT_EFFORT`: leave unset to use their Codex defaults.
 - `RELAYBOT_REPOS_ROOT`: where their clones live (`<root>/<repo>`). Verify with `ls`.
 - `RELAYBOT_DEFAULT_WORKDIR`: folder for tasks tied to no project; for Codex desktop filing, ask them to create a project with this root.

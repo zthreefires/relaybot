@@ -15,6 +15,9 @@ if [ -f "$RELAYBOT_HOME/config.env" ]; then
   while IFS='=' read -r k v || [ -n "$k" ]; do
     case $k in ''|\#*) continue ;; esac
     k=$(printf '%s' "$k" | tr -d '[:space:]')
+    # The handoff worker reads this switch from config.env again at delivery.
+    # Leave it in the environment only when the caller supplied an override.
+    [ "$k" = RELAYBOT_HANDOFF_AUTO_SYNC ] && continue
     case $k in RELAYBOT_*) ;; *) continue ;; esac
     v=${v%$'\r'}
     v=${v%\"}; v=${v#\"}

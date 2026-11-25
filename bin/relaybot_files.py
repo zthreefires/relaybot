@@ -43,5 +43,20 @@ def save_origin(run, bot):
     replace_file(run / "origin.json", json.dumps(route).encode(), first=True)
 
 
+def read_file(path):
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return b""
+
+
+def config_value(config, name):
+    for line in config.splitlines():
+        key, _, value = line.partition(b"=")
+        if key.strip() == name.encode() and value.strip().strip(b'"'):
+            return value.strip().strip(b'"').decode()
+    return ""
+
+
 if __name__ == "__main__":
     save_origin(Path(sys.argv[1]), sys.argv[2])

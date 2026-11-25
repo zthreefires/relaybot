@@ -47,13 +47,15 @@ The local command is `<runner> /handoff "<run_dir>" "<workdir>"`, using the runn
 
 ## Sync desktop progress
 
-Auto-sync is off for each new run. Send `/auto-sync` or `/auto-sync on` in the originating chat, before or after opening the task with `/handoff`. The Mac schedules one update 12 hours from the latest successful handoff. If that deadline has passed when you enable it, the job runs immediately. Another handoff starts a fresh interval. Send `/auto-sync off` to cancel the pending job and turn off future timers for that run.
+Auto-sync is on by default. Each successful `/handoff` on the Mac schedules one update 12 hours later. Another handoff restarts the timer. Send `/auto-sync off` in the originating chat to cancel the pending job and disable future timers for that run. Send `/auto-sync on` (or just `/auto-sync`) to re-enable that run. Re-enabling uses the latest handoff's deadline. An overdue update runs immediately.
+
+Set `RELAYBOT_HANDOFF_AUTO_SYNC=0` in `config.env` to disable automatic scheduling and delivery for all runs. Pending jobs recheck the setting before sending. After switching back to `1`, the next handoff schedules a timer for an enabled run. To schedule an existing handoff, send `/auto-sync on`. An explicit environment setting on the runner takes precedence over the file for that handoff and its job. Runs saved as off by earlier versions keep that preference until you send `/auto-sync on`.
 
 ```bash
-codex-run /auto-sync "$run_dir" "$workdir" on
 codex-run /handoff "$run_dir" "$workdir"
 codex-run /sync "$run_dir"                    # request a snapshot now
 codex-run /auto-sync "$run_dir" "$workdir" off
+codex-run /auto-sync "$run_dir" "$workdir" on
 ```
 
 Use `claude-run` for a Claude task. Manual `/sync` works after handoff, including when auto-sync is off. Each manual request sends a fresh snapshot and keeps any automatic timer. The report contains the visible reply from each new turn, or the latest available progress if the last turn is still open. A quiet session sends a no-progress event. An inaccessible transcript produces a read-error report.

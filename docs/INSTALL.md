@@ -48,7 +48,8 @@ Environment variables win over `config.env`. All keys are optional.
 | `RELAYBOT_PYTHON` | `python3` on PATH | interpreter for the helper scripts |
 | `RELAYBOT_CLIENT_NAME` | `relaybot` | client name reported to Codex |
 | `RELAYBOT_MAX_SECONDS` | none | optional cap per turn |
-| `RELAYBOT_HANDOFF_SYNC_HOURS` | 12 | Hours after handoff for an opted-in run’s one-shot desktop sync |
+| `RELAYBOT_HANDOFF_AUTO_SYNC` | 1 | Schedule a desktop sync after each successful macOS handoff. Set 0 to disable automatic scheduling and delivery globally. |
+| `RELAYBOT_HANDOFF_SYNC_HOURS` | 12 | Hours from the latest successful handoff to its one-shot desktop sync |
 | `RELAYBOT_FORCE_EXEC` | empty | skip app-server for ordinary Codex runs (env only). Managed worktree runs require app-server and fail when this is set. |
 
 Webhook files: `~/.config/relaybot/webhooks/<slug>.json`, mode 600, shaped like

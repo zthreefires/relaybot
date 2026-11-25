@@ -15,7 +15,7 @@ Codex app-server threads are visible in the desktop. Claude uses the local CLI.
 - `bin/codex-notify`: webhook poster with per-pause dedupe (python3).
 - `bin/codex-relay-hook`: shared turn-status resolver and pause recorder (not a Codex hook; relaybot passes no hooks).
 - `bin/relaybot-doctor`: checks the install and each CLI's sign-in status. An explicit `--webhook-test` sends a test event.
-- `skills/codex` dispatches to either runner. `skills/claude` uses that workflow with `claude-run` for `/claude`. `skills/handoff` opens the current task on the desktop. `skills/auto-sync` handles opt-in desktop reports. `skills/relaybot-setup` checks both and wires one webhook per bot.
+- `skills/codex` dispatches to either runner. `skills/claude` uses that workflow with `claude-run` for `/claude`. `skills/handoff` opens the current task on the desktop and schedules a report by default. `skills/auto-sync` toggles reports for one run. `skills/relaybot-setup` checks both and wires one webhook per bot.
 - `docs/ARCHITECTURE.md`: flow, run dir, event contract. `docs/INSTALL.md`, `docs/USAGE.md`,
   `docs/INSTALL_FOR_AGENTS.md`.
 - `config.example.env`, `examples/`: sample config, webhook file, event, task, routine prompt.
@@ -34,7 +34,7 @@ Full agent walkthrough: [docs/INSTALL_FOR_AGENTS.md](docs/INSTALL_FOR_AGENTS.md)
 In `~/.config/relaybot/config.env` or the environment: `RELAYBOT_CODEX_BIN`, `RELAYBOT_CLAUDE_BIN`, `RELAYBOT_CLAUDE_SKIP_PERMISSIONS`, `RELAYBOT_MODEL`,
 `RELAYBOT_EFFORT`, `RELAYBOT_SANDBOX`, `RELAYBOT_DEFAULT_WORKDIR`, `RELAYBOT_PROJECT_FALLBACK_ROOT`,
 `RELAYBOT_REPOS_ROOT`, `RELAYBOT_RUN_ROOT`, `RELAYBOT_EXTRA_PATH`, `RELAYBOT_PYTHON`,
-`RELAYBOT_CLIENT_NAME`, `RELAYBOT_MAX_SECONDS`, `RELAYBOT_HANDOFF_SYNC_HOURS`; env only: `RELAYBOT_HOME`, `RELAYBOT_FORCE_EXEC`.
+`RELAYBOT_CLIENT_NAME`, `RELAYBOT_MAX_SECONDS`, `RELAYBOT_HANDOFF_AUTO_SYNC`, `RELAYBOT_HANDOFF_SYNC_HOURS`; env only: `RELAYBOT_HOME`, `RELAYBOT_FORCE_EXEC`.
 Webhooks: `~/.config/relaybot/webhooks/<slug>.json` = `{url, key, bot}` (mode 600, never commit).
 
 ## Self-check

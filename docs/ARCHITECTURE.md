@@ -34,13 +34,13 @@ A new task creates a private directory with `mktemp -d` under `RELAYBOT_RUN_ROOT
 | `notified.jsonl` | codex-notify | dedupe ledger |
 | `exit`, `pid` | shared launcher | exit code and pid |
 | `origin.json` | shared launcher | original bot slug and configuration directory for delayed delivery |
-| `handoff/state.json` | handoff helpers | per-run opt-in, latest handoff time, workdir, transcript root, session ID and pending launchd job |
+| `handoff/state.json` | handoff helpers | per-run sync preference, latest handoff time, workdir, transcript root, session ID and pending launchd job |
 | `sync.md`, `sync-status.json` | handoff sync | desktop snapshot and its status, handoff time and session ID |
 | `followup.md` | the agent | text for a `resume` turn |
 
 ## Desktop handoff sync
 
-A successful handoff records the session and time under a separate run-local lock. Opted-in runs install a calendar LaunchAgent under `~/Library/LaunchAgents/local.relaybot.handoff-sync.<id>.plist`. Each new timer has its own ID. At load and at the calendar deadline, the worker checks the current ID and due time under the same lock. Turning sync off or handing off again invalidates the previous ID. A worker removes its own plist and unloads its job after delivery or queuing.
+A successful handoff records the session and time under a separate run-local lock. By default it installs a calendar LaunchAgent under `~/Library/LaunchAgents/local.relaybot.handoff-sync.<id>.plist`. Both the run preference and the global `RELAYBOT_HANDOFF_AUTO_SYNC` switch must be on. Each new timer has its own ID. At load and at the calendar deadline, the worker checks the current ID and due time under the same lock. A per-run opt-out or another handoff invalidates the previous ID. At delivery time the worker rechecks the global switch, skips delivery if disabled, then removes its plist and unloads the job.
 
 The worker opens the exact Codex rollout under `$CODEX_HOME/sessions` (default `~/.codex/sessions`) or Claude transcript under `$CLAUDE_CONFIG_DIR/projects` (default `~/.claude/projects`) read-only. It uses timestamped assistant messages, tool activity and turn lifecycle records. A missing, ambiguous or unreadable transcript produces `unavailable`. Running status reflects the latest recorded turn state. The originating bot receives the sync through its existing webhook, independently of the turn notification ledger.
 
