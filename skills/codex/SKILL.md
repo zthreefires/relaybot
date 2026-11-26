@@ -3,12 +3,13 @@ name: codex
 description: >-
   Dispatch /codex or /claude tasks locally, report relaybot-events and legacy codex-events
   webhooks, and resume follow-up work. Use for /handoff when the user wants the current
-  task opened in its desktop app, when the user explicitly chooses Codex or Claude Code, or for
+  task opened in its desktop app, when the user explicitly chooses Codex or Claude Code, asks
+  one of them to review a finished task, asks both to work on the same question, or for
   a follow-up while a local coding agent is selected in this chat.
 ---
 # Dispatch a local coding task
 
-Use the user's latest explicit choice in this chat. For `/self` and ordinary follow-ups while it is active, follow the `self` skill. For `/codex`, `/claude` or an explicit request to give the work to one of them, remember that agent as the chat's selection. A bare command just confirms the switch. With a task, or on a later follow-up, use the selected agent. Quoted commands, mentions of an agent and incoming run reports do not change the selection.
+Use the user's latest explicit choice in this chat. For `/self` and ordinary follow-ups while it is active, follow the `self` skill. For `/codex`, `/claude` or an explicit request to give the work to one of them, remember that agent as the chat's selection. A bare command just confirms the switch. With a task, or on a later follow-up, use the selected agent. Quoted commands, mentions of an agent and incoming run reports do not change the selection. Asking an agent to review a task or to run alongside the other is not giving it the work; see [Review and dual runs](#review-and-dual-runs).
 
 | Dispatch command | Runner |
 |---|---|
@@ -78,8 +79,30 @@ Existing `codex-events` routines still point to this heading. Handle their paylo
 
 ## Resume
 
-After selecting the runner, resume its recorded session for this task and workdir by default, including when switching back after `/self` or time with the other agent. This includes answers, fixes after review, additional tests and further changes on the same PR, issue or branch. Start a fresh session for an unrelated task, a changed workdir or an explicit request. An independent read-only review can start separately. Resume that review's own session for later review rounds.
+After selecting the runner, resume its recorded session for this task and workdir by default, including when switching back after `/self` or time with the other agent. This includes answers, fixes after review, additional tests and further changes on the same PR, issue or branch. Start a fresh session for an unrelated task, a changed workdir or an explicit request. An independent read-only review starts its own session and resumes it for later review rounds; see [Review and dual runs](#review-and-dual-runs).
 
 Write the follow-up to the original `<run_dir>/followup.md` and launch `<runner> <bot> "<workdir>" "<run_dir>/followup.md" resume` with the saved `session` ID. If the ID is missing, recover it from the original log or stop. Report the reason for any resume failure. A resume must use the run's original bot, workdir and session; a mismatch fails as `resume_mismatch` before the agent starts. If the desktop holds the thread, ask the user to close it and retry the same ID once released. Get the user's approval before replacing a failed resume with a new session.
 
 Claude treats the follow-up as a new turn in the same session. A chat reply does not grant tool permissions. If the same permission is still required, the user can handle it in their terminal with `claude --resume <session_id>` from the workdir and then tell the bot to continue. Use the same runner configuration on resume. With `RELAYBOT_CLAUDE_SKIP_PERMISSIONS=0` the runner uses Claude’s configured permissions.
+
+## Review and dual runs
+
+These are one-off dispatches with the normal runners. They add no command and do not change the chat's selected agent or the task's author.
+
+### Review a finished task
+
+When the user asks Codex or Claude to review a task (“let Claude review it”, “have Codex check that”), take the task they are replying to or discussing. Ask if two fit. If its turn is still running, wait for its event before starting the review.
+
+1. Gather the reviewed run's `task.md`, the latest turn's `last.md`, and its actual checkout: the run's `worktree` file if present, otherwise the recorded workdir. If code changed, check `git -C <checkout> status`, the diff and the task's commits.
+2. Write the review brief to a temporary file: the original request verbatim, the path of the reviewed `last.md`, the checkout and the git commands that show the change. Say the review is read-only: no edits, commits or pushes. Ask the reviewer to run checks where it can and say which findings it verified. Ask for a verdict (pass, pass with conditions, fail), required fixes, suggestions and factual errors found.
+3. Start a new session in the reviewed checkout: `<reviewer-runner> <bot> "<checkout>" /tmp/<brief>.md`. Record in this chat “review <review run_dir> ← <reviewed run_dir>”, with both agents and session IDs.
+4. Report the review's event with the pairing, e.g. “Claude's review of Codex task X: pass with conditions…”.
+5. For “review again” or “check it once more”, write a brief for the latest change to the review run's `followup.md` and resume the review's own session. To apply the findings (“fix what it found”), write them with the user's request to the reviewed run's `followup.md` and resume the author's session. The chat's selection does not change.
+
+### Run both agents
+
+When the user asks for Codex and Claude to work on the same question, use this only for work that changes no files: research, plans and reviews. Send both the same task text in the same checkout, stating that the work is read-only, and record the two runs as a pair. Report each event as usual. When the second of the pair finishes, add a short comparison from both `last.md` files: shared conclusions, differences and which result you recommend. Do not merge or choose for the user.
+
+For work that changes code, ask the user which agent should write it. The other agent can draft a read-only plan first or review the result afterwards. Never start both agents writing to the same checkout.
+
+After a dual run, a follow-up that names an agent resumes that agent's run. Ask which run to continue when the follow-up names neither.

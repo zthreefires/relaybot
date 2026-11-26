@@ -45,6 +45,12 @@ the desktop by hand.
 
 Use the same bot, webhook and workdir selection as for `/codex`. The bot starts `claude-run`. Claude Code runs in CLI print mode with its local permission settings. When an ordinary tool approval blocks the task, the bot reports the operation and offers a choice for every Claude task using this relaybot installation. Choose **Yes, skip future prompts and continue** to save `RELAYBOT_CLAUDE_SKIP_PERMISSIONS=1` and resume this task once in the same session. Choose **No, keep local permissions** to save `0` and leave this task paused. Later approval requests still reach the bot. While the question is unanswered, new tasks continue with local permissions. You can change the key later in `config.env`. An approval or structured question produces `needs_auth` and the bot relays the request. After you respond, it passes your text to a new turn in that session. If the tool still needs interactive approval, open `claude --resume <id>` in the original directory. A question in ordinary reply text can arrive as `done`. The bot reads it and waits for your answer.
 
+## Review a task or run both agents
+
+No extra command is needed. After Codex finishes, say “let Claude review it”. The bot writes a review brief from the task's request, Codex's final reply and the change in its checkout (including a `--worktree` checkout). It then starts a read-only Claude session in that checkout and reports the review in this chat as Claude's review of that task. Say “check it again” to continue the same review session. Say “fix what it found” to send the findings to Codex's original session. Asking for a review does not switch the chat to the reviewer.
+
+Say “have both look at this” to send the same question to Codex and Claude. This is for research, plans and reviews that change no files. Each result arrives separately, and when both are done the bot adds a short comparison. For a code change, the bot asks which agent should write it. The other can plan first or review afterwards, so the two never write to the same checkout.
+
 ## Open the current task on desktop
 
 Send `/handoff` in the bot chat. The bot opens the Codex thread or the Claude Desktop Code session for the task you are discussing. With multiple possible tasks, reply to the result you want. Regular results carry the session ID as metadata and open the desktop only on your request.

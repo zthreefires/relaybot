@@ -15,7 +15,7 @@ The personal agent keeps the context and writes the full prompt; the user picks 
 
 ## Skills
 
-- [skills/codex/SKILL.md](skills/codex/SKILL.md): /codex or /claude, dispatch a task and handle events
+- [skills/codex/SKILL.md](skills/codex/SKILL.md): /codex or /claude, dispatch a task and handle events, review a finished task with the other agent or run both on read-only work
 - [skills/claude/SKILL.md](skills/claude/SKILL.md) routes /claude to the codex skill's dispatch and resume instructions with `claude-run`.
 - [skills/self/SKILL.md](skills/self/SKILL.md) keeps follow-ups with the bot until the user selects a coding agent again.
 - [skills/handoff/SKILL.md](skills/handoff/SKILL.md) opens the current task on the desktop when the user sends /handoff.
