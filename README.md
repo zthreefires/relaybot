@@ -150,7 +150,7 @@ After `/relaybot-setup`:
 - Each CLI has its own sign-in result. To repeat the shared webhook check, run `~/bin/relaybot-doctor --webhook-test <slug>` and look for `sent 200` or another 2xx.
 - The bot's event routine should confirm receipt in this chat.
 
-A queued webhook, including a redirect, is a delivery failure. It is written to `~/.config/relaybot/outbox.jsonl` without credentials. There is no automatic retry. Do not rerun the task just because delivery queued.
+A queued webhook, including a redirect, is a delivery failure. It is written to `~/.config/relaybot/outbox.jsonl` without credentials. There is no automatic retry. Do not rerun the task just because delivery queued. Check `delivery` in the run's `status.json` and send the recorded event again with `~/bin/codex-run /resend <run_dir>` (or `claude-run`).
 
 ## Ask the human only for these
 

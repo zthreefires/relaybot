@@ -5,7 +5,11 @@ During a turn: `codex-notify <bot> needs_auth <run_dir> <workdir> <reason>` reco
 first pause (codex-app-run calls it on approval/permission/user-input requests); nothing is sent.
 --final (codex-run only): POST the turn's single event. `test` events are sent directly.
 --handoff-sync <bot> <run_dir> <workdir>: POST the snapshot prepared under the handoff lock.
-Payload: see docs/ARCHITECTURE.md "Webhook events". Delivery failures go to outbox.jsonl.
+--resend <run_dir> [turn-id] [--force]: POST a turn's recorded final event again to the run's
+  original bot. Never reruns the task. An already delivered event needs --force.
+Payload: see docs/ARCHITECTURE.md "Webhook events". Delivery failures go to outbox.jsonl. The final
+event is kept in turn-*/event.json and its delivery (delivered, attempts, last_error) in
+turn-*/delivery.json, mirrored into status.json while that turn is current.
 """
 import fcntl
 import json
@@ -16,15 +20,25 @@ import time
 import urllib.error
 import urllib.request
 
+from relaybot_files import locked, replace_file
+
 
 REPLY_MAX = 8000
 
 
 def read(path):
     try:
-        return path.read_text(encoding="utf-8", errors="replace")
+        return path.read_bytes().decode("utf-8", errors="replace")  # keep CRLF as written
     except OSError:
         return ""
+
+
+def load(path):
+    try:
+        data = json.loads(path.read_bytes() or b"{}")
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 class DirectPost(urllib.request.HTTPRedirectHandler):
@@ -42,8 +56,95 @@ def reserve(run, pause, event):
         return True
 
 
+def post(base, bot, body):
+    """POST once. Returns None when delivered, else a short error safe to store (no URL or key)."""
+    try:
+        cfg = json.loads((base / "webhooks" / (bot + ".json")).read_text())
+        req = urllib.request.Request(cfg["url"], data=json.dumps(body).encode(), method="POST", headers={
+            "Content-Type": "application/json", "Authorization": "Bearer " + cfg["key"], "X-Automation-Key": cfg["key"]})
+        with urllib.request.build_opener(DirectPost()).open(req, timeout=8) as response:
+            if 200 <= response.status < 300:
+                print("sent", response.status)
+                return None
+            error = f"HTTP {response.status}"
+    except urllib.error.HTTPError as e:
+        error = f"HTTP {e.code}"
+        e.close()
+    except Exception as e:
+        error = type(e).__name__  # URLs, response text and exception details can contain secrets
+    base.mkdir(parents=True, exist_ok=True)
+    with (base / "outbox.jsonl").open("a") as f:
+        print(json.dumps({"bot": bot, "error": error, **body}), file=f)
+    print("queued:", error)
+    return error
+
+
+def track(run, turn, error, mirror):
+    """Record one delivery attempt for the turn; the caller holds the turn lock."""
+    now = int(time.time())
+    data = load(turn / "delivery.json")
+    data = dict(turn_id=turn.name, delivered=bool(data.get("delivered")) or error is None,
+                attempts=int(data.get("attempts") or 0) + 1, last_attempt_at=now,
+                last_error=error, delivered_at=now if error is None else data.get("delivered_at"))
+    replace_file(turn / "delivery.json", json.dumps(data).encode())
+    if mirror:
+        status = load(run / "status.json")
+        if status.get("pause") == turn.name:
+            replace_file(run / "status.json", json.dumps(dict(status, delivery=data), ensure_ascii=False).encode())
+    return data
+
+
+def owned_run(run_dir):
+    run = Path(run_dir)
+    if (not run.name.startswith(("codex-run-", "claude-run-")) or run.is_symlink() or not run.is_dir()
+            or run.stat().st_uid != os.getuid()):
+        sys.exit(f"codex-notify: not an owned relaybot run directory: {run_dir}")
+    return run.resolve()
+
+
+def resend(args):
+    force = "--force" in args
+    args = [a for a in args if a != "--force"]
+    if len(args) not in (1, 2):
+        sys.exit(__doc__)
+    run = owned_run(args[0])
+    name = args[1] if len(args) == 2 else read(run / "pause").strip()
+    turn = run / name
+    if not name.startswith("turn-") or Path(name).name != name or not (turn / "event.json").is_file():
+        sys.exit(f"codex-notify: no recorded final event for turn {name or '(none)'} in {run}")
+    route = load(run / "origin.json")
+    bot = route.get("bot")
+    if not bot or Path(bot).name != bot or bot in (".", ".."):
+        sys.exit("codex-notify: this run has no saved webhook route")
+    base = Path(route.get("home") or os.environ.get("RELAYBOT_HOME") or "~/.config/relaybot").expanduser()
+    with locked(turn):
+        delivery = load(turn / "delivery.json")
+        if delivery.get("delivered") and not force:
+            print(f"already delivered ({delivery.get('attempts')} attempt(s)); pass --force to send it again")
+            return 0
+        body = dict(load(turn / "event.json"), ts=int(time.time()), resent=True,
+                    delivery_attempt=int(delivery.get("attempts") or 0) + 1)
+        error = post(base, bot, body)
+        # Mirror into status.json only when no turn is running (the runner holds the run lock).
+        fd = os.open(run, os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            idle = True
+        except OSError:
+            idle = False
+        try:
+            data = track(run, turn, error, idle)
+        finally:
+            os.close(fd)
+    print(f"delivery: delivered={str(data['delivered']).lower()} attempts={data['attempts']}"
+          + (f" last_error={error}" if error else ""))
+    return 0 if error is None else 1
+
+
 def main():
     args = sys.argv[1:]
+    if args[:1] == ["--resend"]:
+        sys.exit(resend(args[1:]))
     final = args[:1] == ["--final"]
     sync = args[:1] == ["--handoff-sync"]
     if sync:
@@ -86,13 +187,23 @@ def main():
                      reply_truncated=len(reply) > REPLY_MAX, reply_file=str(run / "sync.md"))
     elif event != "test":
         sid = read(run / "session").strip() or None
-        reply = read(run / "last.md")
+        current = run / pause if final and pause.startswith("turn-") else None
+        # The turn's own reply; last.md mirrors it until the next turn replaces it.
+        reply = read(current / "last.md") if current else read(run / "last.md")
         code = read(run / "exit").strip()
         extra = dict(session_id=sid, exit_code=int(code) if code.lstrip("-").isdigit() else None,
                      reply=reply[:REPLY_MAX], reply_truncated=len(reply) > REPLY_MAX,
                      reply_file=str(run / "last.md") if reply else None)
+        status = load(run / "status.json") if final else {}
+        if current and status.get("pause") == pause:
+            extra.update(turn_id=pause, turn_seq=status.get("turn_seq"), event_id=f"{run.name}/{pause}",
+                         outcome=status.get("outcome"), failure_kind=status.get("failure_kind"),
+                         turn_reply_file=str(current / "last.md") if reply else None)
+            partial = read(current / "partial.md") if status.get("partial_reply_file") else ""
+            if partial:
+                extra.update(partial_reply=partial[:REPLY_MAX], partial_reply_truncated=len(partial) > REPLY_MAX,
+                             partial_reply_file=str(current / "partial.md"))
         if final and event == "needs_auth":
-            status = json.loads(read(run / "status.json") or "{}")
             if status.get("pause") == pause and status.get("pause_kind"):
                 extra["pause_kind"] = status["pause_kind"]
                 if status.get("permission_question"):
@@ -100,24 +211,14 @@ def main():
     base = Path(os.environ.get("RELAYBOT_HOME") or "~/.config/relaybot").expanduser()
     body = dict(event=event, run_id=run.name, run_dir=run_dir, workdir=workdir, message=msg[:2000],
                 ts=int(time.time()), **extra)
-    try:
-        cfg = json.loads((base / "webhooks" / (bot + ".json")).read_text())
-        req = urllib.request.Request(cfg["url"], data=json.dumps(body).encode(), method="POST", headers={
-            "Content-Type": "application/json", "Authorization": "Bearer " + cfg["key"], "X-Automation-Key": cfg["key"]})
-        with urllib.request.build_opener(DirectPost()).open(req, timeout=8) as response:
-            if 200 <= response.status < 300:
-                print("sent", response.status)
-                return
-            error = f"HTTP {response.status}"
-    except urllib.error.HTTPError as e:
-        error = f"HTTP {e.code}"
-        e.close()
-    except Exception as e:
-        error = type(e).__name__  # URLs, response text and exception details can contain secrets
-    base.mkdir(parents=True, exist_ok=True)
-    with (base / "outbox.jsonl").open("a") as f:
-        print(json.dumps({"bot": bot, "error": error, **body}), file=f)
-    print("queued:", error)
+    if not extra.get("turn_id"):
+        post(base, bot, body)
+        return
+    # Keep the exact event (no credentials) so /resend can deliver it without rerunning the task.
+    turn = run / pause
+    with locked(turn):
+        replace_file(turn / "event.json", json.dumps(body, ensure_ascii=False).encode())
+        track(run, turn, post(base, bot, body), True)
 
 
 if __name__ == "__main__":

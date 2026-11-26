@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Shared launcher for codex-run and claude-run. The invoked name selects the agent.
 # Usage: <agent>-run <bot> <workdir|-> <task_file> [resume | --worktree <branch> (Codex)]
+#        <agent>-run /resend <run_dir> [turn-id] [--force]   redeliver a recorded event, never rerun
 # The snapshot, lock, pause, reply and webhook all belong to one launch.
 set -u
 
@@ -58,6 +59,9 @@ if [ "${1:-}" = /handoff ]; then
   exec "$PY" "$here/desktop_handoff.py" "$agent" "$binary" "$RUN_ROOT" "$2" "$workdir"
 fi
 case "${1:-}" in
+  /resend)
+    [ "$#" -ge 2 ] && [ "$#" -le 4 ] || { echo "usage: $runner /resend <run_dir> [turn-id] [--force]" >&2; exit 2; }
+    exec "$PY" "$here/codex-notify" --resend "${@:2}" ;;
   /auto-sync)
     if [ "$#" -lt 3 ]; then
       echo "usage: $runner /auto-sync <run_dir> <workdir|-> [on|off] [--bot <original-slug>]" >&2; exit 2
@@ -142,6 +146,10 @@ if ! cat "$task" > "$turn/input.md"; then
   if [ "$mode" != resume ]; then rmdir "$run"; fi
   die "cannot snapshot task: $task"
 fi
+# A stable 1-based turn number for this run, counted under the run lock.
+seq=0
+for d in "$run"/turn-*/; do [ -d "$d" ] && seq=$((seq + 1)); done
+echo "$seq" > "$turn/seq" || die "cannot number turn"
 if [ "$mode" = resume ]; then
   chmod 700 "$run" || die "cannot secure run directory"
   if [ -e "$run/last.md" ]; then
@@ -154,6 +162,11 @@ fi
 if [ ! -f "$run/origin.json" ]; then
   "$PY" "$here/relaybot_files.py" "$run" "$bot" || die "cannot save originating webhook route"
 fi
+# A resume keeps its original bot, workdir and session; a mismatch fails as resume_mismatch.
+bind_mode=; [ "$mode" = resume ] && bind_mode=resume
+mismatch=$("$PY" "$here/relaybot_files.py" --bind "$run" "$turn" "$bot" "$workdir" $bind_mode)
+bound=$?
+case $bound in 0|3) ;; *) die "cannot check the run binding" ;; esac
 export RELAYBOT_RUN_DIR=$run RELAYBOT_TURN_DIR=$turn
 # The prompt is the task, verbatim. Nothing is appended (it would show in the desktop thread).
 cat "$turn/input.md" > "$run/prompt.md" || die "cannot prepare prompt"
@@ -165,15 +178,39 @@ rm -f "$run/status.json" "$run/exit" || die "cannot clear previous result"
 : >> "$run/log.txt" || die "cannot open run log"
 log_start=$(wc -c < "$run/log.txt") || die "cannot read log size"
 echo "started run_dir=$run"
+# A stop request (TERM, INT, HUP) reaches the backend as TERM so it can end the turn and keep
+# its partial reply; the launcher still resolves the status and sends the turn's event.
+child=; stopped=
+# shellcheck disable=SC2329  # invoked by the traps below
+forward() {
+  stopped=$1
+  if [ -n "$child" ]; then kill -TERM "$child" 2>/dev/null; fi
+}
+trap 'forward TERM' TERM; trap 'forward INT' INT; trap 'forward HUP' HUP
+backend() {  # backend <stdin> <command...>: wait for the command through forwarded signals
+  local input=$1; shift
+  "$@" < "$input" &
+  child=$!
+  wait "$child"; rc=$?
+  while [ -n "$stopped" ] && kill -0 "$child" 2>/dev/null; do wait "$child"; rc=$?; done
+  child=
+}
+# shellcheck disable=SC2329  # invoked through backend()
+exec_new() { exec "$binary" exec -C "$workdir" "${opts[@]}"; }
+# shellcheck disable=SC2329  # invoked through backend()
+exec_resume() { cd "$workdir" && exec "$binary" exec resume "$sid" "${opts[@]}"; }
 rc=97
-if [ "$agent" = claude ]; then
-  "$PY" "$here/claude-stream-run" "$binary" "$workdir" "$sid" >> "$run/log.txt" 2>&1
-  rc=$?
+if [ "$bound" = 3 ]; then
+  echo "[$runner] $mismatch" >> "$run/log.txt"
+  rc=1
+elif [ "$agent" = claude ]; then
+  backend /dev/null "$PY" "$here/claude-stream-run" "$binary" "$workdir" "$sid" >> "$run/log.txt" 2>&1
 elif [ -x "$here/codex-app-run" ] && [ -z "${RELAYBOT_FORCE_EXEC:-}" ]; then
-  "$here/codex-app-run" "$bot" "$workdir" "$run" "$@" >> "$run/log.txt" 2>&1
-  rc=$?
+  backend /dev/null "$here/codex-app-run" "$bot" "$workdir" "$run" "$@" >> "$run/log.txt" 2>&1
 fi
-if [ "$managed" ] && [ $rc -eq 97 ]; then
+if [ -n "$stopped" ] && [ $rc -eq 97 ]; then
+  rc=$((128 + 15))
+elif [ "$managed" ] && [ $rc -eq 97 ]; then
   echo "[codex-run] managed worktree runs require the Codex app-server" >> "$run/log.txt"
   rc=1
 elif [ "$agent" = codex ] && [ $rc -eq 97 ]; then
@@ -185,24 +222,34 @@ elif [ "$agent" = codex ] && [ $rc -eq 97 ]; then
   # Keep the live log and scope the session header to this invocation.
   offset=$(wc -c < "$run/log.txt") || die "cannot read log size"
   if [ "$mode" = resume ]; then
-    (cd "$workdir" && "$binary" exec resume "$sid" "${opts[@]}") < "$run/prompt.md" >> "$run/log.txt" 2>&1
+    backend "$run/prompt.md" exec_resume >> "$run/log.txt" 2>&1
   else
-    "$binary" exec -C "$workdir" "${opts[@]}" < "$run/prompt.md" >> "$run/log.txt" 2>&1
+    backend "$run/prompt.md" exec_new >> "$run/log.txt" 2>&1
   fi
-  rc=$?
   header=$(tail -c "+$((offset+1))" "$run/log.txt" | awk '/^session id: / {print $3; exit}')
   if [ "$mode" != resume ] && [ -n "$header" ]; then
     echo "$header" > "$run/session" || die "cannot save session ID"
   elif [ "$mode" = resume ] && [ -n "$header" ] && [ "$header" != "$sid" ]; then
     echo "[codex-run] resumed a different session from the requested ID" >> "$run/log.txt"
+    PYTHONPATH=$here "$PY" -c 'import sys; from relaybot_files import note_turn; note_turn(sys.argv[1], "failed", "resume_mismatch", sys.argv[2])' \
+      "$turn" "Codex resumed session $header instead of $sid." 2>> "$run/log.txt"
     [ "$rc" != 0 ] || rc=1
   fi
 fi
+# turn-*/last.md is this turn's reply and is never rewritten; last.md mirrors the latest one.
+# A stopped or failed turn keeps the text it had in turn-*/partial.md.
 if [ -s "$turn/reply.md" ]; then
-  mv "$turn/reply.md" "$run/last.md" || die "cannot publish reply"
+  mv "$turn/reply.md" "$turn/last.md" || die "cannot save reply"
+  chmod 444 "$turn/last.md" || die "cannot save reply"
+  cat "$turn/last.md" > "$turn/publish.tmp" || die "cannot publish reply"
+  mv "$turn/publish.tmp" "$run/last.md" || die "cannot publish reply"
 fi
-if [ -f "$run/session" ]; then sid=$(cat "$run/session"); fi
-result=$("$PY" "$here/codex-relay-hook" --result "$rc" "$log_start" "$bot" "$workdir") || die "cannot resolve turn status"
+if [ -s "$turn/partial.md" ]; then chmod 444 "$turn/partial.md" || die "cannot save partial reply"; fi
+if [ -f "$run/session" ]; then
+  sid=$(cat "$run/session")
+  "$PY" "$here/relaybot_files.py" --bind-session "$run" || die "cannot record the run's session"
+fi
+result=$(RELAYBOT_STOP_SIGNAL=$stopped "$PY" "$here/codex-relay-hook" --result "$rc" "$log_start" "$bot" "$workdir") || die "cannot resolve turn status"
 st=${result%%$'\n'*}
 why=${result#*$'\n'}
 if [ "$st" = failed ] && [ "$rc" = 0 ]; then rc=1; fi

@@ -7,13 +7,16 @@
                                                called by codex-notify for needs_auth requests
 
 Status comes only from system signals, never from the reply text:
-  failed      Codex/runner exited nonzero, or the turn produced no final reply
+  failed      Codex/runner exited nonzero, the turn was stopped, or it produced no final reply
   needs_auth  a pause was recorded this turn (app-server approval / permission / user-input request)
   done        the turn finished; the receiver reads the reply to see what Codex said
+`outcome` separates a stopped turn (interrupted) from an error (failed); `failure_kind` classifies
+the error from the backend's turn note (turn-*/backend.json) or the exit code.
 Needs RELAYBOT_RUN_DIR and RELAYBOT_TURN_DIR (set by codex-run).
 """
 import json
 import os
+import signal
 from pathlib import Path
 import sys
 import tempfile
@@ -53,16 +56,48 @@ def pending(turn):
         pass
 
 
-def result(turn, rc, reply):
+STOPPED = {128 + s for s in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)}
+EXIT_KINDS = {126: "cli_missing", 127: "cli_missing"}  # shell: not executable / not found
+
+
+def backend_note(turn):
+    try:
+        data = json.loads((turn / "backend.json").read_bytes())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def failed(turn, reason, source, kind):
+    return dict(record(turn, "failed", reason, source), outcome="failed", failure_kind=kind)
+
+
+def result(turn, rc, reply, stopped=""):
     agent = "Claude Code" if turn.parent.name.startswith("claude-run-") else "Codex"
+    note = backend_note(turn) if rc else {}
+    detail = (note.get("detail") or "").strip()
+    kind = note.get("failure_kind")
+    if rc and not kind and (note.get("outcome") == "interrupted" or stopped or rc in STOPPED):
+        by = f" (SIG{stopped})" if stopped else ""
+        data = record(turn, "failed", f"{agent} was stopped{by} before the turn finished. {detail}".strip(), "interrupt")
+        return dict(data, outcome="interrupted", failure_kind=None)
     if rc:
-        return record(turn, "failed", f"{agent} exited with code {rc}. See log.txt for details.", "exit")
+        kind = kind or EXIT_KINDS.get(rc, "crash")
+        reason = f"{agent} exited with code {rc} ({kind}). " + (detail + " " if detail else "") + "See log.txt for details."
+        return failed(turn, reason, "exit", kind)
     paused = pending(turn)
     if paused:
-        return paused
+        return dict(paused, outcome="needs_auth", failure_kind=None)
     if not reply.strip():
-        return record(turn, "failed", f"{agent} returned no reply for this turn.", "reply")
-    return record(turn, "done", "Turn finished.", "turn")
+        return failed(turn, f"{agent} returned no reply for this turn.", "reply", "no_reply")
+    return dict(record(turn, "done", "Turn finished.", "turn"), outcome="done", failure_kind=None)
+
+
+def read_text(path):
+    try:
+        return path.read_bytes().decode("utf-8", errors="replace")  # keep CRLF as written
+    except FileNotFoundError:
+        return ""
 
 
 def main():
@@ -73,11 +108,14 @@ def main():
     run, turn = Path(run_dir), Path(turn_dir)
     if sys.argv[1:2] == ["--result"]:
         rc, log_start = map(int, sys.argv[2:4])
-        try:
-            reply = (run / "last.md").read_text(encoding="utf-8", errors="replace")
-        except FileNotFoundError:
-            reply = ""
-        data = result(turn, rc, reply)
+        reply = read_text(turn / "last.md")
+        data = result(turn, rc, reply, os.environ.get("RELAYBOT_STOP_SIGNAL", ""))
+        seq = read_text(turn / "seq").strip()
+        data.update(turn_id=turn.name, turn_seq=int(seq) if seq.isdigit() else None,
+                    session_id=read_text(run / "session").strip() or None,
+                    reply_file=str(turn / "last.md") if reply else None)
+        if data["outcome"] in ("failed", "interrupted") and read_text(turn / "partial.md").strip():
+            data["partial_reply_file"] = str(turn / "partial.md")
         if (data.get("pause_kind") == "tool_approval" and run.name.startswith("claude-run-")
                 and not os.environ.get("RELAYBOT_CLAUDE_SKIP_PERMISSIONS") and len(sys.argv) == 6
                 and (run / "session").is_file()):

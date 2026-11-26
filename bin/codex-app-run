@@ -11,7 +11,10 @@ Reads  run/prompt.md (turn input, sent verbatim), run/task.md (thread title), ru
 Approval, permission and user-input requests from the app-server are declined (nobody is at the
 keyboard) and recorded once per turn as a needs_auth pause via codex-notify; codex-run then sends
 needs_auth as the turn's single event.
-Writes run/session (thread id, immediately), the current turn's reply.md (last agent message).
+Writes run/session (thread id, immediately), the current turn's reply.md (the turn's last
+final_answer message; an unphased message only from servers that send no final_answer) and, when the
+turn has no final answer, partial.md (its latest agent text). A failed or interrupted turn records its
+outcome and failure kind in the turn's backend.json for the status resolver.
 After turn/start, on item completion (at most every 15s) and at the end, it pings the
 desktop over ~/.codex/ipc/ipc.sock ("thread-unarchived" broadcast) so the desktop
 refreshes the thread without a restart. Undocumented, best-effort.
@@ -32,6 +35,8 @@ Config (environment, or KEY=VALUE lines in $RELAYBOT_HOME/config.env):
 """
 import fcntl, json, os, queue, shutil, signal, socket, struct, subprocess, sys, threading, time, uuid
 from pathlib import Path
+
+from relaybot_files import note_turn
 
 
 def load_config():
@@ -79,6 +84,20 @@ class StartError(Exception):
 
 class RpcError(RuntimeError):
     """The server explicitly rejected the request."""
+
+
+class Mismatch(StartError):
+    """The resumed thread or checkout is not the one this run recorded."""
+
+
+ERROR_KINDS = {"unauthorized": "auth", "usageLimitExceeded": "usage_limit"}
+
+
+def turn_error_kind(turn):
+    """Map the turn's codexErrorInfo (a string or a one-key object) to a failure kind."""
+    info = (turn.get("error") or {}).get("codexErrorInfo") if isinstance(turn.get("error"), dict) else None
+    name = next(iter(info), None) if isinstance(info, dict) else info
+    return ERROR_KINDS.get(name, "agent_error")
 
 
 # ---------- desktop refresh over the Codex IPC socket ----------
@@ -263,9 +282,9 @@ def saved_worktree(record, workdir, tid):
     if not dirs or dirs[0] == dirs[1]:
         raise StartError("saved linked worktree is missing: " + checkout)
     if real(workdir) != checkout and checkout_dirs(workdir) != (dirs[1], dirs[1]):
-        raise StartError("saved worktree belongs to a different repository: " + checkout)
+        raise Mismatch("saved worktree belongs to a different repository: " + checkout)
     if json.loads(owner_file(checkout).read_text())["ownerThreadId"] != tid:
-        raise StartError("saved worktree belongs to a different thread")
+        raise Mismatch("saved worktree belongs to a different thread")
     return checkout
 
 
@@ -375,15 +394,41 @@ def main():
     turn_dir = os.environ.get("RELAYBOT_TURN_DIR")
     output = os.path.join(turn_dir, "reply.md") if turn_dir else os.path.join(run, "last.md")
     max_s = float(os.environ.get("RELAYBOT_MAX_SECONDS") or 0)
-    prompt = open(os.path.join(run, "prompt.md"), encoding="utf-8").read()
+    # Bytes in, bytes out: text-mode reads would turn the task's CRLF into LF.
+    prompt = Path(run, "prompt.md").read_bytes().decode("utf-8")
     if not managed:
         os.makedirs(workdir, exist_ok=True)
 
-    state = {"tid": None, "turn": None, "done": None, "last": None, "last_ping": 0.0, "notified_auth": False}
+    state = {"tid": None, "turn": None, "done": None, "final": None, "unphased": None, "partial": None,
+             "last_ping": 0.0, "notified_auth": False, "step": "initialize", "published": False}
     srv = None
+
+    def note(outcome, kind=None, detail=""):
+        if turn_dir:
+            try:
+                note_turn(turn_dir, outcome, kind, detail)
+            except OSError as e:
+                log("[codex-app-run] cannot record turn outcome:", e)
+
+    def publish():
+        """Write the turn's reply once: its final answer, else keep the latest text as partial."""
+        if state["published"]:
+            return
+        state["published"] = True
+        reply = state["final"] if state["final"] is not None else state["unphased"]
+        if reply is not None:
+            Path(output).write_bytes(reply.encode("utf-8"))
+        elif state["partial"] and turn_dir:
+            Path(turn_dir, "partial.md").write_bytes(state["partial"].encode("utf-8"))
 
     def cleanup_and_exit(signum, _frame):
         log(f"[codex-app-run] received signal {signum}, stopping")
+        if state["turn"]:
+            note("interrupted", None, f"Stopped by signal {signum}.")
+            try:
+                publish()
+            except OSError:
+                pass
         if srv and state["tid"] and state["turn"]:
             try:
                 srv.send({"id": 999999, "method": "turn/interrupt", "params": {"threadId": state["tid"], "turnId": state["turn"]}})
@@ -441,9 +486,16 @@ def main():
             it = p.get("item") or {}
             t = it.get("type")
             if t == "agentMessage":
+                # Only the final answer is the reply. Commentary never is, and an unphased
+                # message counts only if the turn sends no final_answer (older servers).
                 text = it.get("text") or ""
-                if it.get("phase") in (None, "final_answer"):
-                    state["last"] = text
+                phase = it.get("phase")
+                if phase == "final_answer":
+                    state["final"] = text
+                elif phase is None:
+                    state["unphased"] = text
+                if text.strip():
+                    state["partial"] = text
                 log("[agent]", clip(text, 4000))
             elif t == "commandExecution":
                 log(f"[cmd] $ {clip(it.get('command'), 500)}  (exit {it.get('exitCode')}, {it.get('durationMs')}ms)")
@@ -471,6 +523,11 @@ def main():
         elif m == "turn/completed":
             turn = p.get("turn") or {}
             state["done"] = turn
+            if turn.get("status") == "interrupted":
+                note("interrupted", None, "The turn was interrupted.")
+            elif turn.get("status") != "completed":
+                detail = (turn.get("error") or {}).get("message") if isinstance(turn.get("error"), dict) else None
+                note("failed", turn_error_kind(turn), detail or f"Turn {turn.get('status')}.")
             log(f"[turn] {turn.get('status')}" + (f" error: {clip(json.dumps(turn.get('error'), ensure_ascii=False), 800)}" if turn.get("error") else ""))
         elif m == "error":
             log("[error]", clip(json.dumps(p, ensure_ascii=False), 800))
@@ -490,12 +547,13 @@ def main():
         if EFFORT:
             common["config"] = {"model_reasoning_effort": EFFORT}
         if resume:
+            state["step"] = "resume"
             if managed:
                 workdir = saved_worktree(record, workdir, tid)
             result = srv.request("thread/resume", {"threadId": tid, **common}, handle)
             th = result["thread"]
             if th.get("id") != tid:
-                raise StartError("thread/resume returned a different thread ID")
+                raise Mismatch("thread/resume returned a different thread ID")
             print(f"session id: {tid}", flush=True)
             log(f"[codex-app-run] resumed thread, cwd={th.get('cwd')} project={th.get('projectId')}")
         else:
@@ -529,7 +587,7 @@ def main():
             log(f"[codex-app-run] new thread cwd={real(workdir)} project={(proj or {}).get('name')} "
                 f"({(proj or {}).get('id')}) desktop=codex://threads/{tid}")
         if managed and any(not cwd or real(cwd) != workdir for cwd in (result.get("cwd"), th.get("cwd"))):
-            raise StartError("app-server returned a different worktree cwd")
+            raise (Mismatch if resume else StartError)("app-server returned a different worktree cwd")
         if new_worktree:
             if th.get("projectId") != proj["id"]:
                 raise StartError("app-server returned a different project")
@@ -541,6 +599,7 @@ def main():
             except Exception as e:
                 log("[codex-app-run] could not set title:", e)
         state["tid"] = tid
+        state["step"] = "turn"
         tparams = {"threadId": tid, "input": [{"type": "text", "text": prompt, "text_elements": []}]}
         if EFFORT:
             tparams["effort"] = EFFORT
@@ -559,6 +618,10 @@ def main():
         log(f"[codex-app-run] start failed: {e}")
         if srv:
             srv.close()
+        if state.get("started"):
+            kind = ("resume_mismatch" if isinstance(e, Mismatch)
+                    else "resume_failed" if state["step"] == "resume" else "start_failed")
+            note("failed", kind, clip(str(e), 400))
         if "active writer" in str(e):
             log("[codex-app-run] this thread is open/being written by another Codex process (e.g. the desktop). "
                 "Finish or close it there, then resume again.")
@@ -576,6 +639,7 @@ def main():
         while state["done"] is None:
             if max_s and time.time() - started > max_s:
                 log(f"[codex-app-run] exceeded RELAYBOT_MAX_SECONDS={max_s:.0f}, interrupting")
+                note("failed", "timeout", f"The turn exceeded RELAYBOT_MAX_SECONDS={max_s:.0f}.")
                 try:
                     srv.request("turn/interrupt", {"threadId": state["tid"], "turnId": state["turn"]}, handle, timeout=30)
                 except Exception:
@@ -587,14 +651,13 @@ def main():
                 continue
             if o is None:
                 log("[codex-app-run] app-server exited unexpectedly: " + " | ".join(srv.stderr_tail[-5:]))
+                note("failed", "crash", "The app-server exited during the turn.")
                 break
             handle(o)
         if state["done"] is not None and state["done"].get("status") == "completed":
             rc = 0
     finally:
-        if state["last"] is not None:
-            with open(output, "w", encoding="utf-8") as f:
-                f.write(state["last"])
+        publish()
         ping(force=True)
         srv.close()
     log(f"[codex-app-run] exit {rc}")

@@ -26,9 +26,16 @@ A new task creates a private directory with `mktemp -d` under `RELAYBOT_RUN_ROOT
 | `session` | selected backend | Codex thread id or Claude session UUID, used for `resume` |
 | `worktree` | codex-app-run | absolute checkout path for a run opened with `--worktree <branch>`, also used as the webhook workdir |
 | `turn-*/input.md` | shared launcher | input snapshot for this launch |
+| `turn-*/seq` | shared launcher | 1-based turn number within the run, counted under the run lock |
+| `turn-*/last.md` | shared launcher | this turn's final reply, read-only and never rewritten by later turns |
+| `turn-*/partial.md` | selected backend | latest agent text of a turn that has no final reply (kept for stopped or failed turns) |
+| `turn-*/backend.json` | selected backend | `{outcome, failure_kind, detail}` when the backend knows why the turn stopped |
+| `turn-*/event.json` | codex-notify | the turn's final webhook body (no credentials), used by `/resend` |
+| `turn-*/delivery.json` | codex-notify | `{turn_id, delivered, attempts, last_attempt_at, last_error, delivered_at}` |
 | `turn-*/previous-last.md` | shared launcher | previous published reply, moved aside on resume |
-| `last.md` | shared launcher | current reply, published by atomic rename from the turn directory |
-| `status.json` | shared status resolver | `{status, reason, pause, turn_id, session_id, source, ts}`; `status` is `done`, `needs_auth` or `failed` |
+| `last.md` | shared launcher | copy of the latest turn's reply, replaced atomically |
+| `status.json` | shared status resolver | `{status, outcome, failure_kind, reason, pause, turn_id, turn_seq, session_id, reply_file, partial_reply_file?, delivery?, source, ts}`; see [Turn status](#codex-turn-status) |
+| `binding.json` | shared launcher | `{workdir, session}` recorded by the first launch; a resume must match it |
 | `turn-*/pending.json` | shared pause recorder | first approval/user-input request of this launch |
 | `pause` | shared launcher | id of this launch; notifications and status are scoped to it |
 | `notified.jsonl` | codex-notify | dedupe ledger |
@@ -115,7 +122,8 @@ hooks, so the thread in the desktop reads exactly like a task the user typed, an
 hand there carries nothing from relaybot. Constraints (for example "don't push", "stop before a
 login") belong in the task text, which the dispatching bot writes.
 
-The turn's status comes only from system signals:
+The turn's status comes only from system signals (process exit, signals, app-server requests and
+turn notifications, Claude stream frames):
 
 - the process exit: nonzero from codex-app-run or `codex exec` means `failed`;
 - the app-server's requests: `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`,
@@ -124,6 +132,45 @@ The turn's status comes only from system signals:
   declines or refuses each one and records the first as the turn's pause (`turn-*/pending.json`,
   through `codex-notify <bot> needs_auth ...`). That makes the turn `needs_auth`;
 - an empty final reply on a clean exit means `failed`.
+
+### Final reply
+
+Only a Codex `agentMessage` with `phase: "final_answer"` in the current turn is the reply; the last such
+message wins. Commentary is never the reply, and a message after the final answer does not replace it.
+An unphased message is used only when the turn has no final answer (servers that send no phases). If a
+turn ends without a reply, its latest agent text is kept in `turn-*/partial.md`. Claude's reply is the
+`result` frame; the latest assistant text is the partial. Reply files are written as bytes, so CRLF
+line endings are preserved.
+
+### Outcome and failure kind
+
+`status` keeps its three values. `outcome` separates how the turn ended:
+
+| `outcome` | `status` | meaning |
+|---|---|---|
+| `done` | `done` | the turn finished with a final reply |
+| `needs_auth` | `needs_auth` (or `blocked`) | a pause was recorded |
+| `interrupted` | `failed` | the turn was stopped: the runner got TERM/INT/HUP, the backend exited from a signal, or the Codex turn completed as `interrupted` |
+| `failed` | `failed` | the turn ended with an error; `failure_kind` says which |
+
+The launcher forwards a stop signal to the backend as TERM, waits for it and still sends the turn's
+event. A stopped or failed turn keeps any partial text (`partial_reply_file`).
+
+| `failure_kind` | source |
+|---|---|
+| `cli_missing` | the CLI could not be started (Claude spawn error, exec exit 126/127) |
+| `auth` | the Codex turn failed with `codexErrorInfo: unauthorized` (Claude account problems are `needs_auth`) |
+| `usage_limit` | the Codex turn failed with `usageLimitExceeded` |
+| `agent_error` | the agent reported an error for the turn (other Codex turn errors, unsuccessful Claude result) |
+| `timeout` | `RELAYBOT_MAX_SECONDS` was exceeded |
+| `resume_mismatch` | a resume did not match the run's bot (`origin.json`), workdir or session (`binding.json`), or the backend resumed a different session or checkout. Checked before the agent starts; the original session is never replaced |
+| `resume_failed` | the saved Codex thread could not be resumed (unknown thread, held by the desktop, missing worktree) |
+| `start_failed` | the app-server was up but the thread, worktree or turn could not start |
+| `no_reply` | a clean exit without a final reply |
+| `crash` | any other nonzero exit (backend died, malformed stream, exec failure) |
+
+`outcome` and `failure_kind` are `null` in older status files. Webhook delivery is tracked separately
+and never changes the turn's status or exit code.
 
 Everything else is `done`: the turn finished. Whether Codex completed the task, asked a question or got
 stuck is in the reply text; the receiving bot reads it. relaybot never parses the reply.
@@ -168,6 +215,14 @@ Headers: `Content-Type: application/json`, `Authorization: Bearer <key>`, `X-Aut
 | `reply` | this turn's final agent message (`last.md`), first 8000 chars; `""` if there was none |
 | `reply_truncated` | `true` when `reply` was cut; read `reply_file` for the rest |
 | `reply_file` | path of `sync.md` for `handoff_sync`, otherwise `last.md` on the relaybot computer, or `null` when there is no reply |
+| `turn_id`, `turn_seq`, `event_id` | the turn directory name, its 1-based number in the run, and `<run_id>/<turn_id>`, stable across resends |
+| `outcome`, `failure_kind` | see [Outcome and failure kind](#outcome-and-failure-kind) |
+| `turn_reply_file` | `turn-*/last.md`, this turn's immutable reply, or `null` |
+| `partial_reply`, `partial_reply_truncated`, `partial_reply_file` | only for a stopped or failed turn with partial text: first 8000 chars and the `turn-*/partial.md` path |
+| `resent`, `delivery_attempt` | only on a `/resend`: `true` and the attempt number |
+
+The turn fields are present on run events from this version on; older events and `test`/`handoff_sync`
+events omit them.
 
 A `handoff_sync` event carries the snapshot in `reply` (first 8000 characters), the captured `session_id`, `handoff_at` and `synced_at` (Unix seconds), and `sync_status` (`done`, `running`, `interrupted`, `no_progress` or `unavailable`). The `message` describes the read result. The desktop snapshot has no runner exit code.
 
@@ -177,12 +232,19 @@ A `handoff_sync` event carries the snapshot in `reply` (first 8000 characters), 
 |---|---|---|
 | `done` | the turn completed with a final reply and no pause was recorded | read `reply`: report the result, relay the agent's question, or say what blocks it |
 | `needs_auth` | Codex requested approval/input or Claude reported one of the pause signals above | tell the user what the agent requested (`message`, `status.json` `reason`) and any final reply (`reply`); continue only after they agree |
-| `failed` | nonzero exit (app-server error, interrupted, killed, exec failure, resume mismatch), or no final reply | report the reason and log tail |
+| `failed` | nonzero exit (app-server error, interrupted, killed, exec failure, resume mismatch), or no final reply | report `outcome`, `failure_kind`, the reason and log tail, and any `partial_reply` |
 | `handoff_sync` | the handoff timer fired or the user requested a manual sync | report desktop results and open issues in the originating chat. A no-progress event may stay quiet |
 | `test` | `/relaybot-setup` or `relaybot-doctor --webhook-test` | confirm the webhook works |
 
 Delivery: only a direct HTTP 2xx counts. Redirects (301, 302, 303, 307, 308) and other failures are
 queued in `$RELAYBOT_HOME/outbox.jsonl` without credentials; there is no automatic retry, and queuing
 does not change the task's exit code. Each launch has its own dedupe slot in `notified.jsonl`.
+
+Each turn's event body is kept in `turn-*/event.json` and every attempt is recorded in
+`turn-*/delivery.json` (`delivered`, `attempts`, `last_error` such as `HTTP 503` or an exception class
+name, never a URL or key). While that turn is current, `status.json` mirrors it under `delivery`.
+`<runner> /resend <run_dir> [turn-id] [--force]` posts the recorded event again to the run's original
+bot (`origin.json`) with a fresh `ts`, `resent: true` and `delivery_attempt`. It never reruns the task,
+defaults to the current turn, and refuses an event that was already delivered unless `--force` is given.
 
 Each dispatching bot has one webhook routine shared by both runners. New bots use `relaybot-events`. Existing `codex-events` routines keep their name, prompt and webhook. Both prompts point to the same event handler in the `codex` skill.

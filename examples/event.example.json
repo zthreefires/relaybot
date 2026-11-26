@@ -9,5 +9,11 @@
   "exit_code": 0,
   "reply": "The build needs a 2FA code for the package registry. Send it and I will publish.",
   "reply_truncated": false,
-  "reply_file": "/tmp/codex-run-AbC123xy/last.md"
+  "reply_file": "/tmp/codex-run-AbC123xy/last.md",
+  "turn_id": "turn-Xy12Ab34",
+  "turn_seq": 1,
+  "event_id": "codex-run-AbC123xy/turn-Xy12Ab34",
+  "outcome": "done",
+  "failure_kind": null,
+  "turn_reply_file": "/tmp/codex-run-AbC123xy/turn-Xy12Ab34/last.md"
 }

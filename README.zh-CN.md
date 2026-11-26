@@ -150,7 +150,7 @@ git clone https://github.com/zthreefires/relaybot.git ~/relaybot 2>/dev/null || 
 - Codex 和 Claude Code 各有一条登录检查结果。需要复测共用的 webhook 时，运行 `~/bin/relaybot-doctor --webhook-test <slug>`，应看到 `sent 200` 或其他 2xx。
 - 当前 bot 的事件例程随后应在这个对话里确认收到测试事件。
 
-投递被排队（包括遇到重定向）表示送达失败。事件会不带凭证写入 `~/.config/relaybot/outbox.jsonl`。没有自动重发。不要只因为投递被排队就重跑任务。
+投递被排队（包括遇到重定向）表示送达失败。事件会不带凭证写入 `~/.config/relaybot/outbox.jsonl`。没有自动重发。不要只因为投递被排队就重跑任务。可查看该 run 的 `status.json` 里的 `delivery`，并用 `~/bin/codex-run /resend <run_dir>`（或 `claude-run`）重发记录下来的事件。
 
 ## 只向使用者询问这些
 

@@ -80,11 +80,16 @@ At a Git worktree root the app-server reuses a matching project or creates one w
 
 If a sibling worktree's thread is missing from the desktop project, open `codex://threads/<session_id>` on the relaybot computer. To file that individual thread, use **Move to project** in the desktop and select the main repository. Check the proposed folders and the working directory before continuing there. The desktop can propose adding project folders or switching the thread to the main checkout.
 
-Resume snapshots `followup.md` and requires the original ID in `session`. If the ID is missing, recover it from the original log before retrying. Report any failure. If the desktop holds the thread, ask the user to close it and retry the same ID. A replacement session requires the user's approval. An unreadable input or busy run leaves the prior turn usable. During a valid resume, `last.md` can be absent until a fresh reply is published.
+Resume snapshots `followup.md` and requires the original ID in `session`. It must use the run's original bot slug and workdir (for a managed worktree, the main repo or the saved checkout), and the session recorded by the first turn. Otherwise the turn fails with `failure_kind: resume_mismatch` before the agent starts, and the run keeps its session. If the ID is missing, recover it from the original log before retrying. Report any failure. If the desktop holds the thread, ask the user to close it and retry the same ID. A replacement session requires the user's approval. An unreadable input or busy run leaves the prior turn usable. During a valid resume, `last.md` can be absent until a fresh reply is published.
 
-The runner prints `started run_dir=...` before dispatch so the bot can identify an active task for handoff. The last output line is `run_dir=... exit=... session=... status=...`, with status `done`, `needs_auth` or `failed`. `done` and `needs_auth` return 0. A runner failure keeps its nonzero exit code; a clean exit with no final reply is `failed` with exit 1. The webhook event carries the same status plus the reply; see [the event contract](ARCHITECTURE.md#webhook-events).
+The runner prints `started run_dir=...` before dispatch so the bot can identify an active task for handoff. The last output line is `run_dir=... exit=... session=... status=...`, with status `done`, `needs_auth` or `failed`. `done` and `needs_auth` return 0. A runner failure keeps its nonzero exit code; a clean exit with no final reply is `failed` with exit 1. `status.json` and the webhook also carry `outcome` (`done`, `needs_auth`, `interrupted` or `failed`), a `failure_kind` for failures (for example `cli_missing`, `auth`, `timeout`, `resume_mismatch`), and the turn's `turn_id` and `turn_seq`. Each turn's reply stays in `turn-*/last.md`; a stopped or failed turn keeps its partial text in `turn-*/partial.md`. Stopping the runner with TERM, INT or HUP ends the turn as `interrupted` and still sends its event. See [the event contract](ARCHITECTURE.md#webhook-events).
 
-Configure the final webhook URL directly. The receiver must return 2xx. A redirect or delivery error queues the event in `outbox.jsonl`. Check the queue for delivery issues before considering another task launch.
+Configure the final webhook URL directly. The receiver must return 2xx. A redirect or delivery error queues the event in `outbox.jsonl`. Each turn records its delivery in `turn-*/delivery.json` (mirrored as `delivery` in `status.json`). To deliver it again without rerunning the task:
+
+```bash
+codex-run /resend /tmp/codex-run-...            # current turn; refuses if already delivered
+claude-run /resend /tmp/claude-run-... turn-... --force   # a specific turn, even if delivered
+```
 
 ## Isolated Codex tasks
 

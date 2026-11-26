@@ -8,6 +8,7 @@ from pathlib import Path
 import plistlib
 import re
 import select
+import signal
 import subprocess
 import sys
 import tempfile
@@ -67,18 +68,18 @@ class Runs(unittest.TestCase):
                         RELAYBOT_HOME=str(self.home), RELAYBOT_RUN_ROOT=str(self.root / 'runs'),
                         RELAYBOT_DEFAULT_WORKDIR=str(self.root / 'codex-for-grok'))
 
-    def endpoint(self, code):
-        cfg = dict(url=f'http://127.0.0.1:{self.server.server_port}/{code}', key='synthetic-test-value', bot='test')
-        (self.home / 'webhooks/test.json').write_text(json.dumps(cfg))
+    def endpoint(self, code, bot='test'):
+        cfg = dict(url=f'http://127.0.0.1:{self.server.server_port}/{code}', key='synthetic-test-value', bot=bot)
+        (self.home / 'webhooks' / (bot + '.json')).write_text(json.dumps(cfg))
 
     def records(self):
         return [json.loads(x) for x in self.trace.read_text().splitlines()]
 
-    def launch(self, backend='exec', task=None, resume=False, work=None, branch=None, **cfg):
+    def launch(self, backend='exec', task=None, resume=False, work=None, branch=None, bot='test', **cfg):
         cfg.setdefault('reply', DONE)
         env = dict(self.env, FIXTURE=json.dumps(cfg), RELAYBOT_FORCE_EXEC='' if backend == 'app' else '1')
         runner = 'claude-run' if backend == 'claude' else 'codex-run'
-        args = [str(BIN / runner), 'test', str(work or self.work), str(task or self.task)]
+        args = [str(BIN / runner), bot, str(work or self.work), str(task or self.task)]
         if resume:
             args.append('resume')
         if branch is not None:
@@ -87,6 +88,9 @@ class Runs(unittest.TestCase):
 
     def finish(self, proc, status, rc=0, delivered=True):
         out, err = proc.communicate(timeout=20)
+        if isinstance(rc, tuple):  # either code is acceptable; check the one actually returned
+            self.assertIn(proc.returncode, rc, out + err)
+            rc = proc.returncode
         self.assertEqual(proc.returncode, rc, out + err)
         m = re.fullmatch(r'run_dir=(.+) exit=(\d+) session=(\S*) status=(\w+)', out.splitlines()[-1])
         self.assertIsNotNone(m, out)
@@ -698,8 +702,17 @@ class Runs(unittest.TestCase):
             self.assertNotIn(DONE.splitlines()[0], self.message)
             self.finish(self.launch(backend, task=follow, resume=True, reply=AUTH), 'done')
             self.assertEqual((a / 'last.md').read_text(), AUTH)
+            # A changed session never silently resumes another conversation.
             (a / 'session').write_text('unknown\n')
+            self.trace.write_text('')
+            self.finish(self.launch(backend, task=follow, resume=True), 'failed', 1)
+            self.assertEqual(self.payload['failure_kind'], 'resume_mismatch')
+            self.assertIn('session changed', self.message)
+            self.assertEqual(self.records(), [])
+            # Unbound (legacy) runs still try the saved ID; an unknown thread fails to resume.
+            (a / 'binding.json').unlink()
             self.finish(self.launch(backend, task=follow, resume=True), 'failed', 7 if backend == 'exec' else 1)
+            self.assertEqual(self.payload['failure_kind'], 'crash' if backend == 'exec' else 'resume_failed')
             for content in ('  \n', None):
                 if content is None:
                     (a / 'session').unlink()
@@ -770,6 +783,176 @@ class Runs(unittest.TestCase):
         for cfg in (dict(reply=DONE, phase='commentary'), dict(reply=DONE, reply_turn='previous')):
             run = self.finish(self.launch('app', **cfg), 'failed', 1)
             self.assertFalse((run / 'last.md').exists())
+            self.assertEqual(self.payload['failure_kind'], 'no_reply')
+        # Messages after the final answer (commentary or unphased) never replace it.
+        for later in ([['status line', None]], [['more commentary', 'commentary']],
+                      [['status line', None], ['note', 'commentary']]):
+            with self.subTest(later=later):
+                run = self.finish(self.launch('app', phase='final_answer', later=later), 'done')
+                self.assertEqual((self.payload['reply'], (run / 'last.md').read_text()), (DONE, DONE))
+        # Commentary is kept as partial text, not sent as the reply.
+        run = self.finish(self.launch('app', reply='looking around', phase='commentary'), 'failed', 1)
+        self.assertEqual((self.payload['reply'], self.payload['partial_reply']), ('', 'looking around'))
+        self.assertEqual(Path(self.payload['partial_reply_file']).read_text(), 'looking around')
+        # Servers that send no phases keep their last message as the reply.
+        self.finish(self.launch('app', later=[['last unphased', None]]), 'done')
+        self.assertEqual(self.payload['reply'], 'last unphased')
+
+    def test_turn_records(self):
+        crlf = 'line one\r\nline two\r\n'
+        for backend in ('exec', 'app', 'claude'):
+            with self.subTest(backend=backend):
+                self.task.write_bytes(b'task\r\nwith CRLF\r\n')
+                run = self.finish(self.launch(backend, reply=crlf), 'done')
+                first = dict(self.payload)
+                self.assertEqual(first['turn_seq'], 1)
+                self.assertRegex(first['turn_id'], r'^turn-')
+                self.assertEqual(first['event_id'], f"{run.name}/{first['turn_id']}")
+                self.assertEqual((first['outcome'], first['failure_kind']), ('done', None))
+                self.assertEqual(first['reply'], crlf)
+                first_file = Path(first['turn_reply_file'])
+                self.assertEqual(first_file, run / first['turn_id'] / 'last.md')
+                self.assertEqual(first_file.read_bytes(), crlf.encode())
+                self.assertEqual((run / 'last.md').read_bytes(), crlf.encode())
+                self.assertEqual(first_file.stat().st_mode & 0o222, 0)
+                self.assertEqual((run / 'prompt.md').read_bytes(), b'task\r\nwith CRLF\r\n')
+                inputs = [r['input'] for r in self.records() if 'input' in r]
+                self.assertEqual(inputs[-1], 'task\r\nwith CRLF\r\n')
+                status = json.loads((run / 'status.json').read_text())
+                self.assertEqual((status['turn_id'], status['turn_seq'], status['outcome']), (first['turn_id'], 1, 'done'))
+                follow = run / 'followup.md'
+                follow.write_text('next')
+                self.finish(self.launch(backend, task=follow, resume=True, reply='second'), 'done')
+                self.assertEqual(self.payload['turn_seq'], 2)
+                self.assertNotEqual(self.payload['turn_id'], first['turn_id'])
+                self.assertEqual(first_file.read_bytes(), crlf.encode())  # not overwritten
+                self.assertEqual((run / 'last.md').read_text(), 'second')
+                self.assertEqual(Path(self.payload['turn_reply_file']).read_text(), 'second')
+
+    def stop_when(self, proc, gate):
+        for _ in range(250):
+            if gate.exists() or proc.poll() is not None:
+                break
+            time.sleep(0.02)
+        self.assertTrue(gate.exists())
+        time.sleep(0.5)  # let the runner read the progress message
+        proc.send_signal(signal.SIGTERM)
+
+    def test_stops_and_failure_kinds(self):
+        # A turn stopped from outside is interrupted, not failed, and keeps its partial text.
+        run = self.finish(self.launch('app', reply=None, progress='half done', turn_status='interrupted'), 'failed', 1)
+        self.assertEqual((self.payload['outcome'], self.payload['failure_kind']), ('interrupted', None))
+        self.assertEqual(self.payload['partial_reply'], 'half done')
+        status = json.loads((run / 'status.json').read_text())
+        self.assertEqual((status['outcome'], status['partial_reply_file']), ('interrupted', self.payload['partial_reply_file']))
+        for backend, cfg in [('app', dict(progress='half done')), ('claude', dict(case='slow')), ('exec', {})]:
+            with self.subTest(backend=backend):
+                gate = self.root / 'gate'
+                proc = self.launch(backend, hold=str(gate), gate=str(gate), **cfg)
+                try:
+                    self.stop_when(proc, gate)
+                finally:
+                    gate.unlink(missing_ok=True)
+                run = self.finish(proc, 'failed', 143)
+                self.assertEqual((self.payload['outcome'], self.payload['failure_kind']), ('interrupted', None))
+                self.assertIn('SIGTERM', self.message)
+                self.assertEqual(self.payload['reply'], '')
+                if backend == 'exec':  # codex exec streams no partial text
+                    self.assertNotIn('partial_reply', self.payload)
+                    continue
+                partial = 'half done' if backend == 'app' else 'partial progress\r\n'
+                self.assertEqual(self.payload['partial_reply'], partial)
+                self.assertEqual((run / self.payload['turn_id'] / 'partial.md').read_bytes(), partial.encode())
+        for backend, cfg, rc, kind in [
+            ('app', dict(turn_status='failed', turn_error={'message': 'sign in', 'codexErrorInfo': 'unauthorized'}), 1, 'auth'),
+            ('app', dict(turn_status='failed', turn_error={'codexErrorInfo': {'httpConnectionFailed': {}}}), 1, 'agent_error'),
+            ('app', dict(turn_status='failed', turn_error={'codexErrorInfo': 'usageLimitExceeded'}), 1, 'usage_limit'),
+            ('app', dict(reply=None), 1, 'no_reply'),
+            ('exec', dict(rc=5), 5, 'crash'),
+            ('claude', dict(is_error=True), 1, 'agent_error'),
+            ('claude', dict(case='broken'), 1, 'crash'),
+        ]:
+            with self.subTest(backend=backend, cfg=cfg):
+                run = self.finish(self.launch(backend, **cfg), 'failed', rc)
+                self.assertEqual((self.payload['outcome'], self.payload['failure_kind']), ('failed', kind))
+                self.assertEqual(json.loads((run / 'status.json').read_text())['failure_kind'], kind)
+        self.env['RELAYBOT_MAX_SECONDS'] = '0.4'
+        self.finish(self.launch('claude', case='hang'), 'failed', 1)
+        self.assertEqual(self.payload['failure_kind'], 'timeout')
+        del self.env['RELAYBOT_MAX_SECONDS']
+        for backend in ('exec', 'claude'):
+            key = 'RELAYBOT_CLAUDE_BIN' if backend == 'claude' else 'RELAYBOT_CODEX_BIN'
+            saved, self.env[key] = self.env[key], str(self.root / 'missing')
+            self.finish(self.launch(backend), 'failed', (126, 127) if backend == 'exec' else 1)  # bash 3.2 / 5
+            self.assertEqual(self.payload['failure_kind'], 'cli_missing')
+            self.env[key] = saved
+        run = self.finish(self.launch('claude'), 'done')
+        follow = run / 'followup.md'
+        follow.write_text('more')
+        self.finish(self.launch('claude', task=follow, resume=True, result_sid='bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb'), 'failed', 1)
+        self.assertEqual(self.payload['failure_kind'], 'resume_mismatch')
+
+    def test_resume_binding(self):
+        self.endpoint(200, bot='other')
+        for backend in ('exec', 'claude'):
+            run = self.finish(self.launch(backend), 'done')
+            follow = run / 'followup.md'
+            follow.write_text('continue')
+            other = self.root / 'other work'
+            other.mkdir(exist_ok=True)
+            for kwargs, problem in [(dict(bot='other'), "belongs to bot 'test'"), (dict(work=other), 'uses workdir')]:
+                with self.subTest(backend=backend, kwargs=kwargs):
+                    self.trace.write_text('')
+                    self.finish(self.launch(backend, task=follow, resume=True, **kwargs), 'failed', 1)
+                    self.assertEqual((self.payload['failure_kind'], self.payload['outcome']), ('resume_mismatch', 'failed'))
+                    self.assertIn(problem, self.message)
+                    self.assertEqual(self.records(), [])  # the agent never ran
+            alias = self.root / f'alias-{backend}'
+            alias.symlink_to(self.work)
+            self.finish(self.launch(backend, task=follow, resume=True, work=alias), 'done')
+
+    def test_delivery_and_resend(self):
+        self.endpoint(503)
+        run = self.finish(self.launch(), 'done', delivered=False)
+        turn = run / (run / 'pause').read_text().strip()
+        delivery = json.loads((turn / 'delivery.json').read_text())
+        self.assertEqual((delivery['delivered'], delivery['attempts'], delivery['last_error']), (False, 1, 'HTTP 503'))
+        self.assertEqual(json.loads((run / 'status.json').read_text())['delivery'], delivery)
+        self.assertNotIn('synthetic-test-value', (turn / 'event.json').read_text())
+
+        def resend(*args, rc=0):
+            proc = subprocess.run([BIN / 'codex-run', '/resend', run, *args], env=self.env,
+                                  capture_output=True, text=True, timeout=20)
+            self.assertEqual(proc.returncode, rc, proc.stdout + proc.stderr)
+            self.assertNotIn('synthetic-test-value', proc.stdout + proc.stderr)
+            return proc.stdout
+
+        self.trace.write_text('')
+        self.assertIn('last_error=HTTP 503', resend(rc=1))
+        self.endpoint(200)
+        self.assertIn('delivered=true attempts=3', resend())
+        self.assertEqual(self.records(), [])  # the task is never rerun
+        body = self.server.calls[-1][2]
+        self.assertEqual((body['event'], body['reply'], body['turn_id'], body['resent'], body['delivery_attempt']),
+                         ('done', DONE, turn.name, True, 3))
+        status = json.loads((run / 'status.json').read_text())
+        self.assertEqual((status['status'], status['delivery']['delivered'], status['delivery']['attempts']), ('done', True, 3))
+        calls = len(self.server.calls)
+        self.assertIn('already delivered', resend())
+        self.assertEqual(len(self.server.calls), calls)
+        resend('--force')
+        self.assertEqual(len(self.server.calls), calls + 1)
+        # Older turns stay addressable; status.json keeps describing the current turn.
+        follow = run / 'followup.md'
+        follow.write_text('again')
+        self.server.calls.clear()
+        self.finish(self.launch(task=follow, resume=True), 'done')
+        resend(turn.name, '--force')
+        self.assertEqual(self.server.calls[-1][2]['turn_id'], turn.name)
+        self.assertNotEqual(json.loads((run / 'status.json').read_text())['turn_id'], turn.name)
+        for bad in ('turn-missing', '../x'):
+            proc = subprocess.run([BIN / 'codex-run', '/resend', run, bad], env=self.env, capture_output=True, text=True)
+            self.assertNotEqual(proc.returncode, 0)
 
     def test_concurrent_resume(self):
         run = self.finish(self.launch(), 'done')

@@ -33,6 +33,9 @@ def answer(method, **params):
 
 def turn(sid, text):
     trace(turn=sid, input=text)
+    if cfg.get('progress') and 'exec' not in sys.argv:
+        answer('item/completed', threadId=sid, turnId='turn',
+               item={'type': 'agentMessage', 'text': cfg['progress'], 'phase': 'commentary'})
     if cfg.get('hold'):
         gate = Path(cfg['hold'])
         gate.touch()
@@ -103,4 +106,9 @@ for line in sys.stdin:
         if reply is not None:
             answer('item/completed', threadId=sid, turnId=cfg.get('reply_turn', 'turn'),
                    item={'type': 'agentMessage', 'text': reply, 'phase': cfg.get('phase')})
-        answer('turn/completed', threadId=sid, turn={'status': 'completed', 'id': 'turn'})
+        for text, phase in cfg.get('later', []):  # messages after the reply, e.g. trailing status lines
+            answer('item/completed', threadId=sid, turnId='turn', item={'type': 'agentMessage', 'text': text, 'phase': phase})
+        done = {'status': cfg.get('turn_status', 'completed'), 'id': 'turn'}
+        if cfg.get('turn_error'):
+            done['error'] = cfg['turn_error']
+        answer('turn/completed', threadId=sid, turn=done)

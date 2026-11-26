@@ -63,6 +63,10 @@ if case in ("permission", "question"):
     sys.exit(88)
 if case == "hang":
     time.sleep(60)
+if case == "slow":
+    emit("assistant", message={"content": [{"type": "text", "text": "partial progress\r\n"}]})
+    Path(cfg["gate"]).touch()
+    time.sleep(60)
 if case == "broken":
     print("malformed")
     sys.exit()

@@ -8,6 +8,14 @@ import subprocess
 import sys
 import uuid
 
+from relaybot_files import note_turn
+
+PARTIAL = []  # the latest assistant text, kept when the turn stops early
+
+
+class SessionMismatch(ValueError):
+    pass
+
 
 def permission_reason(tool, args):
     if tool == "AskUserQuestion" and args.get("questions"):
@@ -50,6 +58,7 @@ def finish(result, turn, rc, account_error):
             return pause("Claude Code needs account attention: " + str(account_error or result["api_error_status"]), "account")
     if rc or result["subtype"] != "success" or result["is_error"] is not False:
         print("Claude Code result:", result["subtype"], "exit:", rc)
+        note_turn(turn, "failed", "agent_error", f"Claude Code reported {result['subtype']}.")
         return rc or 1
     denials = result.get("permission_denials") or []
     if denials:
@@ -95,7 +104,7 @@ def read_turn(proc, run, turn, sid):
         if (kind, subtype) == ("system", "init") or kind == "result":
             reported = frame["session_id"]
             if not isinstance(reported, str) or str(uuid.UUID(reported)) != reported or (sid and sid != reported):
-                raise ValueError("unexpected Claude session ID")
+                raise (SessionMismatch if sid else ValueError)("unexpected Claude session ID")
             if not sid:
                 sid = reported
                 (run / "session").write_text(sid + "\n")
@@ -118,6 +127,13 @@ def read_turn(proc, run, turn, sid):
             raise ValueError("unsupported Claude control request")
         if (kind, subtype) == ("system", "permission_denied"):
             return pause(permission_reason(frame["tool_name"], {}) + " " + frame.get("message", ""), "denial")
+        if kind == "assistant":
+            content = (frame.get("message") or {}).get("content")
+            texts = [c.get("text") for c in content if isinstance(c, dict) and c.get("type") == "text"] \
+                if isinstance(content, list) else []
+            text = "".join(t for t in texts if isinstance(t, str))
+            if text.strip():
+                PARTIAL[:] = [text]
         if kind == "assistant" and frame.get("error") in ("authentication_failed", "billing_error",
                                                           "oauth_org_not_allowed", "account_on_hold"):
             account_error = frame["error"]
@@ -149,15 +165,28 @@ def main():
         args.extend(["--resume", sid])
     run, turn = (Path(os.environ[key]) for key in ("RELAYBOT_RUN_DIR", "RELAYBOT_TURN_DIR"))
     limit = float(os.environ.get("RELAYBOT_MAX_SECONDS") or 0)
-    proc = subprocess.Popen(args, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     try:
-        signal.signal(signal.SIGTERM, interrupted)
+        proc = subprocess.Popen(args, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    except OSError as e:
+        note_turn(turn, "failed", "cli_missing", f"Cannot start {binary}: {type(e).__name__}.")
+        raise
+    try:
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            signal.signal(sig, interrupted)
         signal.signal(signal.SIGALRM, timeout)
         signal.setitimer(signal.ITIMER_REAL, limit)
         return read_turn(proc, run, turn, sid)
+    except TimeoutError as e:
+        note_turn(turn, "failed", "timeout", str(e))
+        raise
+    except SessionMismatch as e:
+        note_turn(turn, "failed", "resume_mismatch", f"Claude Code resumed a different session than {sid}: {e}.")
+        raise
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         stop(proc)
+        if PARTIAL and not (turn / "reply.md").exists():
+            (turn / "partial.md").write_bytes(PARTIAL[0].encode("utf-8"))
 
 
 if __name__ == "__main__":

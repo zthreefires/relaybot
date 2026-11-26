@@ -12,7 +12,7 @@ Codex app-server threads are visible in the desktop. Claude uses the local CLI.
 - `bin/handoff_sync.py` manages per-run desktop snapshot state and optional launchd jobs. `bin/session_progress.py` reads the local session transcript.
 - `bin/claude-stream-run`: Claude Code stream-json client (python3), including permission stops. `bin/claude_preference.py` coordinates the installation-wide permission question.
 - `bin/codex-app-run`: Codex app-server client (python3); desktop-visible threads, project pick, IPC refresh.
-- `bin/codex-notify`: webhook poster with per-pause dedupe (python3).
+- `bin/codex-notify`: webhook poster with per-pause dedupe, per-turn event and delivery records, and `/resend` (python3).
 - `bin/codex-relay-hook`: shared turn-status resolver and pause recorder (not a Codex hook; relaybot passes no hooks).
 - `bin/relaybot-doctor`: checks the install and each CLI's sign-in status. An explicit `--webhook-test` sends a test event.
 - `skills/codex` dispatches to either runner. `skills/claude` uses that workflow with `claude-run` for `/claude`. `skills/handoff` opens the current task on the desktop and schedules a report by default. `skills/auto-sync` toggles reports for one run. `skills/relaybot-setup` checks both and wires one webhook per bot.
