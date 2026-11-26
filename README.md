@@ -6,7 +6,7 @@
   </picture>
 </p>
 
-<p align="center"><strong>Dispatch coding tasks from Grok Bot to Codex or Claude Code, and get the results back in Grok Bot by webhook.</strong></p>
+<p align="center"><strong>Ask Grok Bot to run Codex or Claude Code on your Mac and send the result back to the same chat.</strong></p>
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"></a>
@@ -17,6 +17,12 @@
 </p>
 
 <p align="center">English · <a href="README.zh-CN.md">中文</a></p>
+
+## What can I ask my personal AI assistant to do?
+
+- **“Have Codex fix the bug we just discussed in the repo on my laptop.”** With `/codex`, Grok Bot puts the relevant chat context in the task prompt and runs Codex in your local checkout.
+- **“Ask Claude Code to run the tests. Let me know here when it’s done or needs my input.”** With `/claude`, the task runs in the background. A webhook brings the final reply, failure, or approval request back to this conversation.
+- **“Add a regression test to that fix. I’ll review it at my desk.”** Reply to the result to continue the same coding session. Send `/handoff` when you want to open that session on your desktop.
 
 ## Why
 
@@ -101,7 +107,7 @@ Then:
 
 To test the installed copies instead of `bin/` in the clone, run `~/relaybot/tests/selftest.sh ~/bin`.
 
-3. Install [`skills/codex/SKILL.md`](skills/codex/SKILL.md), [`skills/claude/SKILL.md`](skills/claude/SKILL.md), [`skills/handoff/SKILL.md`](skills/handoff/SKILL.md), [`skills/auto-sync/SKILL.md`](skills/auto-sync/SKILL.md), and [`skills/relaybot-setup/SKILL.md`](skills/relaybot-setup/SKILL.md) into this agent's skill store.
+3. Install [`skills/codex/SKILL.md`](skills/codex/SKILL.md), [`skills/claude/SKILL.md`](skills/claude/SKILL.md), [`skills/self/SKILL.md`](skills/self/SKILL.md), [`skills/handoff/SKILL.md`](skills/handoff/SKILL.md), [`skills/auto-sync/SKILL.md`](skills/auto-sync/SKILL.md), and [`skills/relaybot-setup/SKILL.md`](skills/relaybot-setup/SKILL.md) into this agent's skill store.
 
 ## Wire a bot
 
@@ -127,6 +133,7 @@ Use `/codex` or `/claude` and follow [`skills/codex/SKILL.md`](skills/codex/SKIL
 /relaybot-setup                  # once per bot; safe to re-run
 /codex <what the user wants done>
 /claude <what the user wants done>
+/self [task]                     # Grok handles this chat until you select Codex or Claude again
 /handoff                         # open this task in its desktop app
 /auto-sync [on|off]               # change automatic desktop updates for this task only
 ```

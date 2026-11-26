@@ -15,7 +15,7 @@ Codex app-server threads are visible in the desktop. Claude uses the local CLI.
 - `bin/codex-notify`: webhook poster with per-pause dedupe, per-turn event and delivery records, and `/resend` (python3).
 - `bin/codex-relay-hook`: shared turn-status resolver and pause recorder (not a Codex hook; relaybot passes no hooks).
 - `bin/relaybot-doctor`: checks the install and each CLI's sign-in status. An explicit `--webhook-test` sends a test event.
-- `skills/codex` dispatches to either runner. `skills/claude` uses that workflow with `claude-run` for `/claude`. `skills/handoff` opens the current task on the desktop and schedules a report by default. `skills/auto-sync` toggles reports for one run. `skills/relaybot-setup` checks both and wires one webhook per bot.
+- `skills/codex` dispatches to either runner. `skills/claude` uses that workflow with `claude-run` for `/claude`. `skills/self` switches the chat back to the bot. `skills/handoff` opens the current task on the desktop and schedules a report by default. `skills/auto-sync` toggles reports for one run. `skills/relaybot-setup` checks both and wires one webhook per bot.
 - `docs/ARCHITECTURE.md`: flow, run dir, event contract. `docs/INSTALL.md`, `docs/USAGE.md`,
   `docs/INSTALL_FOR_AGENTS.md`.
 - `config.example.env`, `examples/`: sample config, webhook file, event, task, routine prompt.

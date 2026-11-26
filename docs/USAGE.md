@@ -8,6 +8,12 @@ If one CLI is missing, install it or set its binary path in relaybot's config. I
 
 Setup looks for both `relaybot-events` and the legacy `codex-events`. It reuses the existing routine and its `~/.config/relaybot/webhooks/<slug>.json` (mode 600). Legacy routines keep their name and prompt. Only a bot with neither routine gets a new `relaybot-events`. When credentials are needed, setup asks for the URL and collects the key through a secret request. Rerun the same command after fixing a CLI. Both routes keep the existing slug and key.
 
+## Switch back to the bot with /self
+
+Send `/self` in the bot chat to have Grok handle subsequent messages directly. You can include the first task in the same message. For example, after Claude finishes a fix, send `/self summarize the fix for the release notes`. If you then reply “make it shorter,” Grok edits the summary. Results from earlier runs still arrive in this chat.
+
+When you want Claude back, send `/claude add a regression test for that fix`. The bot resumes Claude's session for that task and checkout. To give the work to Codex, use `/codex` or explicitly ask Codex to take it. Sending a bare `/codex` or `/claude` selects that agent for the next message.
+
 ## /codex (each task)
 
 ```

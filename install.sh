@@ -27,5 +27,5 @@ echo "installed to $prefix"
 echo
 echo "Next:"
 echo "  1. Run: $prefix/relaybot-doctor"
-echo "  2. Install skills/codex, skills/claude, skills/handoff, skills/auto-sync, and skills/relaybot-setup into your agent."
+echo "  2. Install skills/codex, skills/claude, skills/self, skills/handoff, skills/auto-sync, and skills/relaybot-setup into your agent."
 echo "  3. Run /relaybot-setup once per bot to check Codex and Claude Code and test their shared webhook."

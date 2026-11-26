@@ -1,9 +1,9 @@
 ---
 name: claude
-description: Use for /claude, for /handoff on a Claude task, when the user explicitly chooses local Claude Code, or for any follow-up on a task already running in Claude Code.
+description: Use for /claude, for /handoff on a Claude task, when the user explicitly chooses local Claude Code, or for follow-ups while Claude is selected in this chat.
 ---
 
-Load the `codex` skill and follow its Dispatch and Resume instructions, using `claude-run` for every turn.
+Follow the `codex` skill's chat selection rules. Use its Dispatch and Resume instructions with `claude-run` while Claude is selected.
 For a user message of `/handoff` or `/auto-sync [on|off]`, load the `handoff` skill. A successful Claude handoff schedules a desktop update by default. The `/auto-sync` command changes the preference for this run only.
 Do not invoke the `claude` CLI directly because it bypasses the webhook callback.
 

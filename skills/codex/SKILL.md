@@ -4,11 +4,11 @@ description: >-
   Dispatch /codex or /claude tasks locally, report relaybot-events and legacy codex-events
   webhooks, and resume follow-up work. Use for /handoff when the user wants the current
   task opened in its desktop app, when the user explicitly chooses Codex or Claude Code, or for
-  any follow-up on a task already running in Codex or Claude Code.
+  a follow-up while a local coding agent is selected in this chat.
 ---
 # Dispatch a local coding task
 
-Choose the agent the user named. Once the user picks `/codex` or `/claude` for a task, that choice covers the task's follow-ups: further questions, extra research, fixes and tests go to the same agent and [resume](#resume) its session without asking again, and never get done another way instead. Ask the user to name an agent again only for an unrelated task. Use the same runner and workdir for every turn of that task.
+Use the user's latest explicit choice in this chat. For `/self` and ordinary follow-ups while it is active, follow the `self` skill. For `/codex`, `/claude` or an explicit request to give the work to one of them, remember that agent as the chat's selection. A bare command just confirms the switch. With a task, or on a later follow-up, use the selected agent. Quoted commands, mentions of an agent and incoming run reports do not change the selection.
 
 | Dispatch command | Runner |
 |---|---|
@@ -24,7 +24,7 @@ Always launch Codex through `codex-run` and Claude Code through `claude-run` bec
 1. On the user's relaybot computer (use ListMachines if needed), locate the runner in the install prefix, normally `~/bin`. If the computer is offline or the selected CLI is unavailable, tell the user. Keep their choice of agent. New and resumed tasks use the local CLI configuration. Claude adds `--dangerously-skip-permissions` only with an explicit relaybot preference of `1`. If asked about a particular turn, use the `permissionMode` Claude reported for that turn in `log.txt`. An older run may lack this entry. Codex model and effort come from relaybot's config.
 2. Use the folder the user named. For an existing project, check for its clone under `RELAYBOT_REPOS_ROOT` (default `~/Developer`). Ask if you cannot identify the clone. Pass `-` only for a task tied to no existing project. It selects `RELAYBOT_DEFAULT_WORKDIR` (default `~/Documents/relaybot`). Read these settings from `$RELAYBOT_HOME/config.env` (default `~/.config/relaybot/config.env`).
 3. Use this bot's webhook slug. Look up the `bot` field in `$RELAYBOT_HOME/webhooks/<slug>.json` without printing the key. If unwired, use a short kebab-case slug and mention `/relaybot-setup` once. Both runners use the same routine.
-4. For a follow-up, use [Resume](#resume). For a new task, write the task, relevant context and approval boundaries to a temporary UTF-8 file on that computer. Launch in the background (Shell with machineId and block_until_ms 0): `<runner> <bot> "<workdir>" /tmp/<file>.md`. The runner passes the text verbatim.
+4. For a follow-up with a matching run, use [Resume](#resume). If the selected agent has no run for this task, use the task's actual checkout and start a new run. Write the task, relevant context and approval boundaries to a temporary UTF-8 file on that computer. Launch in the background (Shell with machineId and block_until_ms 0): `<runner> <bot> "<workdir>" /tmp/<file>.md`. The runner passes the text verbatim.
 5. Tell the user which agent started and where. Codex app-server threads are titled `[<bot>] <first line>`. For a worktree thread missing from the desktop sidebar, share `codex://threads/<session_id>`. The Codex exec fallback and Claude CLI runs use the terminal. Ask the user to wait for completion before writing to the same session. Do not poll.
 6. For every launch, including resumes, record the task, full `run_dir` and session ID in this bot's chat as soon as the runner or webhook provides them. If no ID was issued, say so. Use the runner's summary, `status.json` and this turn's `last.md` to report the result once, even if both the shell and webhook return it.
 
@@ -64,7 +64,7 @@ claude-run "$bot" "$workdir" "$run/task.md" --permission-choice "$turn" ask
 
 This only claims the question. On `ask`, report the blocked operation and ask in the user's language: “Should Relay Bot skip tool permission prompts for all Claude tasks on this computer? **Yes, skip future prompts and continue this task** / **No, keep my local permissions**.” Record the run and turn with the question in this chat. On `skip`, report the task status without offering the preference. Relay account issues, policy denials and questions requiring user input normally. If the user does not answer, leave the task paused.
 
-Only handle a choice in a later user-authored reply to that specific pending question. A one-off approval of a command is only about that command. For an explicit **yes**, write the user's reply verbatim to the original run's `followup.md`, then invoke the following command once. It saves the preference and resumes the original session.
+Only handle a choice in a later user-authored reply to that specific pending question. If the user sends `/self` instead, switch to the bot and leave the question pending. A one-off approval of a command is only about that command. For an explicit **yes**, write the user's reply verbatim to the original run's `followup.md`, then invoke the following command once. It saves the preference and resumes the original session.
 
 ```bash
 claude-run "$bot" "$workdir" "$run/followup.md" --permission-choice "$turn" yes
@@ -78,7 +78,7 @@ Existing `codex-events` routines still point to this heading. Handle their paylo
 
 ## Resume
 
-In a normal chat turn, resume the task's original session by default. This includes answers, fixes after review, additional tests and further changes on the same PR, issue or branch in the same workdir. Start a fresh session for an unrelated task, a changed workdir or an explicit request. An independent read-only review can start separately. Resume that review's own session for later review rounds.
+After selecting the runner, resume its recorded session for this task and workdir by default, including when switching back after `/self` or time with the other agent. This includes answers, fixes after review, additional tests and further changes on the same PR, issue or branch. Start a fresh session for an unrelated task, a changed workdir or an explicit request. An independent read-only review can start separately. Resume that review's own session for later review rounds.
 
 Write the follow-up to the original `<run_dir>/followup.md` and launch `<runner> <bot> "<workdir>" "<run_dir>/followup.md" resume` with the saved `session` ID. If the ID is missing, recover it from the original log or stop. Report the reason for any resume failure. A resume must use the run's original bot, workdir and session; a mismatch fails as `resume_mismatch` before the agent starts. If the desktop holds the thread, ask the user to close it and retry the same ID once released. Get the user's approval before replacing a failed resume with a new session.
 

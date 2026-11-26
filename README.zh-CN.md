@@ -6,7 +6,7 @@
   </picture>
 </p>
 
-<p align="center"><strong>从 Grok Bot 把编码任务派给 Codex 或 Claude Code，结果通过 webhook 送回 Grok Bot。</strong></p>
+<p align="center"><strong>在 Grok Bot 聊天里调用自己 Mac 上的 Codex 或 Claude Code 改代码，跑完把结果发回原对话。</strong></p>
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"></a>
@@ -17,6 +17,12 @@
 </p>
 
 <p align="center"><a href="README.md">English</a> · 中文</p>
+
+## 可以怎么跟自己的 AI 助手说？
+
+- **“让 Codex 在我电脑上的仓库里，把刚聊的那个 bug 修了。”** 用 `/codex` 派活，Grok Bot 会把对话里相关的项目背景写进任务，让本机 Codex 在对应仓库里改代码。
+- **“叫 Claude Code 跑一下测试，跑完告诉我，需要我确认也在这里叫我。”** 用 `/claude` 派活，任务会在后台运行。最终回复、失败信息或授权请求都会通过 webhook 回到这个聊天。
+- **“给刚才那个修复补个回归测试，我回电脑再看。”** 回复任务结果，就能接着原会话做。想在桌面接手时，发 `/handoff` 打开同一个会话。
 
 ## 为什么做这个
 
@@ -101,7 +107,7 @@ git clone https://github.com/zthreefires/relaybot.git ~/relaybot 2>/dev/null || 
 
 若要测已安装的脚本而不是仓库里的 `bin/`，运行 `~/relaybot/tests/selftest.sh ~/bin`。
 
-3. 把 [`skills/codex/SKILL.md`](skills/codex/SKILL.md)、[`skills/claude/SKILL.md`](skills/claude/SKILL.md)、[`skills/handoff/SKILL.md`](skills/handoff/SKILL.md)、[`skills/auto-sync/SKILL.md`](skills/auto-sync/SKILL.md) 和 [`skills/relaybot-setup/SKILL.md`](skills/relaybot-setup/SKILL.md) 装进当前 agent 的技能库。
+3. 把 [`skills/codex/SKILL.md`](skills/codex/SKILL.md)、[`skills/claude/SKILL.md`](skills/claude/SKILL.md)、[`skills/self/SKILL.md`](skills/self/SKILL.md)、[`skills/handoff/SKILL.md`](skills/handoff/SKILL.md)、[`skills/auto-sync/SKILL.md`](skills/auto-sync/SKILL.md) 和 [`skills/relaybot-setup/SKILL.md`](skills/relaybot-setup/SKILL.md) 装进当前 agent 的技能库。
 
 ## 给 bot 接线
 
@@ -127,6 +133,7 @@ git clone https://github.com/zthreefires/relaybot.git ~/relaybot 2>/dev/null || 
 /relaybot-setup                  # 每个 bot 一次；可重复执行
 /codex <使用者要做的事>
 /claude <使用者要做的事>
+/self [任务]                     # 当前聊天交给 Grok，直到你再指定 Codex 或 Claude
 /handoff                         # 在对应的桌面端打开当前任务
 /auto-sync [on|off]               # 仅更改当前任务的自动回传设置
 ```
